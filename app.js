@@ -1503,6 +1503,7 @@ function renderAssistant() {
             <li>Priorizar la semana segun tareas, comentarios y fechas</li>
             <li>Crear tareas desde lenguaje natural</li>
             <li>Agendar reuniones con fecha y hora</li>
+            <li>Registrar notas y comentarios de revision</li>
             <li>Dar consejo practico sobre un capitulo concreto</li>
           </ul>
         </article>
@@ -1545,7 +1546,9 @@ function assistantSuggestions() {
     "Que deberia priorizar esta semana",
     "Resumeme el progreso actual",
     "Agendar reunion el viernes a las 16:00 con directora sobre metodologia",
-    "Crear tarea cerrar comentarios del capitulo 2 para manana"
+    "Crear tarea cerrar comentarios del capitulo 2 para manana",
+    "Anade nota al capitulo 1: abrir la introduccion con el problema de investigacion",
+    "Registrar comentario del director en capitulo 2: falta justificar la muestra para el viernes"
   ];
 }
 
@@ -1623,6 +1626,8 @@ function buildAssistantReply(message) {
   if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
   if (isMeetingCreationRequest(normalized)) return createMeetingFromPrompt(message);
   if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
+  if (isCommentCreationRequest(normalized)) return createReviewCommentFromPrompt(message);
+  if (isNoteCreationRequest(normalized)) return createChapterNoteFromPrompt(message);
   if (isMeetingAdviceRequest(normalized)) return { reply: buildMeetingAdvice() };
 
   const chapter = findChapterFromPrompt(message);
@@ -1647,6 +1652,14 @@ function isMeetingCreationRequest(normalized) {
 
 function isTaskCreationRequest(normalized) {
   return normalized.includes("tarea") || normalized.includes("recuerdame") || normalized.includes("recordame") || normalized.includes("anade") || normalized.includes("agrega");
+}
+
+function isCommentCreationRequest(normalized) {
+  return normalized.includes("comentario") && (normalized.includes("anade") || normalized.includes("agrega") || normalized.includes("registr") || normalized.includes("crea"));
+}
+
+function isNoteCreationRequest(normalized) {
+  return normalized.includes("nota") && (normalized.includes("anade") || normalized.includes("agrega") || normalized.includes("registr") || normalized.includes("crea"));
 }
 
 function isMeetingAdviceRequest(normalized) {
@@ -1774,6 +1787,57 @@ function createTaskFromPrompt(message) {
   };
 }
 
+function createReviewCommentFromPrompt(message) {
+  const chapter = findChapterFromPrompt(message);
+  const commentText = extractFreeText(message, ["comentario", "registrar comentario", "anade comentario", "agrega comentario"]);
+  if (!commentText) return { reply: "Puedo registrar el comentario, pero necesito el texto. Ejemplo: Registrar comentario del director en capitulo 2: falta justificar la muestra." };
+
+  const source = inferCommentSource(message);
+  const priority = inferCommentPriority(message);
+  const due = extractDateFromText(message);
+  state.reviewComments.unshift({
+    id: createId("rv"),
+    chapter: chapter ? chapter.title : "Sin capitulo",
+    source,
+    comment: commentText,
+    response: "Definir respuesta y criterio de cierre.",
+    status: "Pendiente",
+    priority,
+    due
+  });
+
+  return {
+    reply: `He registrado un comentario de ${source}${chapter ? ` en ${chapter.title}` : ""}${due ? ` con fecha objetivo ${formatDate(due)}` : ""}.`,
+    toastMessage: "Comentario creado desde el asistente"
+  };
+}
+
+function createChapterNoteFromPrompt(message) {
+  const chapter = findChapterFromPrompt(message);
+  if (!chapter) {
+    return { reply: "Puedo guardar la nota, pero necesito que me digas a que capitulo pertenece. Ejemplo: Anade nota al capitulo 1: abrir la introduccion con el problema de investigacion." };
+  }
+
+  const text = extractFreeText(message, ["nota", "anade nota", "agrega nota", "registrar nota"]);
+  if (!text) {
+    return { reply: "Puedo guardar la nota, pero me falta el contenido. Ejemplo: Anade nota al capitulo 1: reforzar el cierre de la seccion teorica." };
+  }
+
+  chapter.notes.unshift({
+    id: createId("nt"),
+    title: noteTitleFromText(text),
+    type: inferNoteType(message),
+    date: extractDateFromText(message) || todayISO(),
+    text
+  });
+  chapter.editorUpdatedAt = new Date().toISOString();
+
+  return {
+    reply: `He guardado una nota en ${chapter.title}.`,
+    toastMessage: "Nota creada desde el asistente"
+  };
+}
+
 function recommendNextMove() {
   const urgentComment = [...state.reviewComments]
     .filter((comment) => comment.status !== "Resuelto")
@@ -1858,6 +1922,50 @@ function extractTaskTitle(text) {
   title = title.replace(/^tarea[: ]*/i, "");
   title = title.replace(/\s+(?:para|el|hoy|manana|mañana|pasado manana|pasado mañana|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|prioridad|impacto)\b[\s\S]*$/i, "");
   return title.trim().replace(/\.$/, "");
+}
+
+function extractFreeText(text, keywords = []) {
+  const raw = String(text || "").trim();
+  const colonIndex = raw.indexOf(":");
+  if (colonIndex >= 0) return raw.slice(colonIndex + 1).trim();
+
+  let cleaned = raw;
+  for (const keyword of keywords) {
+    const pattern = new RegExp(keyword, "i");
+    cleaned = cleaned.replace(pattern, "").trim();
+  }
+  cleaned = cleaned.replace(/^(del|de la|de|al|a la|a)\s+/i, "");
+  cleaned = cleaned.replace(/capitulo\s+\d+/i, "").trim();
+  cleaned = cleaned.replace(/^(director|directora|comite|comité)\s+/i, "").trim();
+  return cleaned.replace(/\s+(?:para|el|hoy|manana|mañana|pasado manana|pasado mañana|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b[\s\S]*$/i, "").trim();
+}
+
+function noteTitleFromText(text) {
+  const compact = String(text || "").trim();
+  if (!compact) return "Nota";
+  return compact.length > 54 ? compact.slice(0, 51).trim() + "..." : compact;
+}
+
+function inferNoteType(text) {
+  const normalized = normalizeUserText(text);
+  if (normalized.includes("riesgo")) return "Riesgo";
+  if (normalized.includes("fuente") || normalized.includes("referencia")) return "Fuente";
+  if (normalized.includes("decision")) return "Decision";
+  return "Idea";
+}
+
+function inferCommentSource(text) {
+  const normalized = normalizeUserText(text);
+  if (normalized.includes("director") || normalized.includes("directora")) return "Direccion";
+  if (normalized.includes("comite") || normalized.includes("comite")) return "Comite";
+  return "Direccion";
+}
+
+function inferCommentPriority(text) {
+  const normalized = normalizeUserText(text);
+  if (normalized.includes("alta") || normalized.includes("urgente")) return "Alta";
+  if (normalized.includes("baja")) return "Baja";
+  return "Media";
 }
 
 function extractImpact(text) {

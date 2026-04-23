@@ -639,6 +639,44 @@ function assistantTools() {
         },
         required: ["date", "time", "type", "attendees", "agenda"]
       }
+    },
+    {
+      type: "function",
+      name: "create_review_comment",
+      description: "Registra un comentario de revision dentro de DoctoralOS.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chapter: { type: "string", description: "Titulo del capitulo o 'Sin capitulo'." },
+          source: { type: "string", description: "Origen del comentario, por ejemplo Direccion o Comite." },
+          comment: { type: "string", description: "Comentario a registrar." },
+          response: { type: "string", description: "Respuesta o plan de respuesta inicial." },
+          status: { type: "string", description: "Estado del comentario, por ejemplo Pendiente o En proceso." },
+          priority: { type: "string", enum: ["Alta", "Media", "Baja"], description: "Prioridad del comentario." },
+          due: { type: "string", description: "Fecha objetivo en formato YYYY-MM-DD o cadena vacia." }
+        },
+        required: ["chapter", "source", "comment", "response", "status", "priority", "due"]
+      }
+    },
+    {
+      type: "function",
+      name: "create_chapter_note",
+      description: "Guarda una nota interna asociada a un capitulo existente de DoctoralOS.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chapter: { type: "string", description: "Titulo del capitulo donde guardar la nota." },
+          title: { type: "string", description: "Titulo corto de la nota." },
+          type: { type: "string", description: "Tipo de nota, por ejemplo Idea, Decision, Riesgo o Fuente." },
+          date: { type: "string", description: "Fecha de la nota en formato YYYY-MM-DD o cadena vacia." },
+          text: { type: "string", description: "Contenido de la nota." }
+        },
+        required: ["chapter", "title", "type", "date", "text"]
+      }
     }
   ];
 }
@@ -710,6 +748,41 @@ function executeAssistantTool(state, call) {
     };
     state.meetings.unshift(meeting);
     return { ok: true, meeting };
+  }
+
+  if (call.name === "create_review_comment") {
+    const due = normalizeIsoDate(args.due);
+    const reviewComment = {
+      id: createEntityId("rv"),
+      chapter: String(args.chapter || "Sin capitulo").trim() || "Sin capitulo",
+      source: String(args.source || "Direccion").trim() || "Direccion",
+      comment: String(args.comment || "").trim(),
+      response: String(args.response || "Definir respuesta y criterio de cierre.").trim() || "Definir respuesta y criterio de cierre.",
+      status: String(args.status || "Pendiente").trim() || "Pendiente",
+      priority: ["Alta", "Media", "Baja"].includes(args.priority) ? args.priority : "Media",
+      due
+    };
+    if (!reviewComment.comment) return { ok: false, error: "El comentario necesita texto." };
+    state.reviewComments.unshift(reviewComment);
+    return { ok: true, reviewComment };
+  }
+
+  if (call.name === "create_chapter_note") {
+    const chapter = findChapterByTitle(state.chapters, args.chapter);
+    if (!chapter) return { ok: false, error: "No he encontrado ese capitulo para guardar la nota." };
+    const date = normalizeIsoDate(args.date) || new Date().toISOString().slice(0, 10);
+    const note = {
+      id: createEntityId("nt"),
+      title: String(args.title || "Nota").trim() || "Nota",
+      type: String(args.type || "Idea").trim() || "Idea",
+      date,
+      text: String(args.text || "").trim()
+    };
+    if (!note.text) return { ok: false, error: "La nota necesita contenido." };
+    chapter.notes = Array.isArray(chapter.notes) ? chapter.notes : [];
+    chapter.notes.unshift(note);
+    chapter.editorUpdatedAt = new Date().toISOString();
+    return { ok: true, note, chapter: chapter.title };
   }
 
   return { ok: false, error: "Herramienta desconocida: " + call.name };
@@ -786,4 +859,17 @@ function trimAssistantThread(thread) {
 
 function createEntityId(prefix) {
   return prefix + "-" + crypto.randomUUID();
+}
+
+function findChapterByTitle(chapters, title) {
+  const target = normalizeChapterTitle(title);
+  return (Array.isArray(chapters) ? chapters : []).find((chapter) => normalizeChapterTitle(chapter.title) === target) || null;
+}
+
+function normalizeChapterTitle(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
 }
