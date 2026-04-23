@@ -75,6 +75,7 @@ let auth = {
   lastSync: ""
 };
 let syncTimer = null;
+let assistantBusy = false;
 
 const screen = document.querySelector("#screen");
 const viewTitle = document.querySelector("#viewTitle");
@@ -1480,7 +1481,7 @@ function renderAssistant() {
         <form class="assistant-composer" data-form="assistant">
           ${field("Escribe tu mensaje", "message", "textarea", "Ejemplo: Crear tarea enviar borrador del capitulo 2 para manana")}
           <div class="summary-actions">
-            <button class="button" type="submit"><span data-icon="plus"></span>Enviar</button>
+            <button class="button" type="submit" ${assistantBusy ? 'disabled' : ''}><span data-icon="plus"></span>${assistantBusy ? 'Pensando...' : 'Enviar'}</button>
           </div>
         </form>
       </div>
@@ -1488,6 +1489,7 @@ function renderAssistant() {
       <aside class="assistant-sidebar">
         <div class="form-panel">
           <h2>Pruebas utiles</h2>
+          <p class="muted">${assistantCanUseRemote() ? 'IA activa con acciones sobre tu tesis.' : 'Modo local activo. Inicia sesion y anade OPENAI_API_KEY para usar IA real.'}</p>
           <div class="assistant-suggestion-grid">
             ${suggestions.map((item) => `<button class="ghost-button assistant-suggestion" data-action="assistant-suggest" data-message="${escapeAttribute(item)}" type="button">${escapeHtml(item)}</button>`).join("")}
           </div>
@@ -1547,19 +1549,61 @@ function assistantSuggestions() {
   ];
 }
 
-function submitAssistantPrompt(message) {
+async function submitAssistantPrompt(message) {
   const text = String(message || "").trim();
   if (!text) {
     showToast("Escribe una pregunta o una accion");
     return;
   }
+  if (assistantBusy) {
+    showToast("El asistente sigue respondiendo");
+    return;
+  }
 
+  assistantBusy = true;
   state.assistantThread.push(createAssistantEntry("user", text));
-  const result = buildAssistantReply(text);
-  state.assistantThread.push(createAssistantEntry("assistant", result.reply));
   pruneAssistantThread();
-  saveState(result.toastMessage || "");
   render();
+
+  try {
+    const result = await requestAssistantReply(text);
+    state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state));
+    saveState("", { skipSync: true });
+    showToast(result.model ? "Asistente IA actualizado" : "Asistente actualizado");
+  } catch (error) {
+    const result = buildAssistantReply(text);
+    state.assistantThread.push(createAssistantEntry("assistant", result.reply));
+    pruneAssistantThread();
+    saveState(result.toastMessage || "Respuesta local guardada");
+    if (assistantCanUseRemote()) {
+      console.warn("Asistente IA no disponible, usando modo local", error);
+    }
+  } finally {
+    assistantBusy = false;
+    render();
+  }
+}
+
+function assistantCanUseRemote() {
+  return API_ENABLED && Boolean(auth.token && auth.user);
+}
+
+async function requestAssistantReply(message) {
+  if (!assistantCanUseRemote()) throw new Error("remote-unavailable");
+
+  const response = await fetch("/api/assistant", {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ message, state })
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "El asistente no esta disponible ahora mismo");
+
+  auth.status = "synced";
+  auth.statusLabel = "Sincronizado";
+  auth.lastSync = shortTime();
+  updateAuthUI();
+  return result;
 }
 
 function pruneAssistantThread() {

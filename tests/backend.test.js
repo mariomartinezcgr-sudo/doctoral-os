@@ -64,6 +64,13 @@ async function main() {
   assert.equal(backup.status, 200);
   assert.equal(backup.body.state.project.name, "Tesis test");
 
+  const assistant = await request("/api/assistant", {
+    method: "POST",
+    token: login.body.token,
+    body: { message: "Resumeme el progreso actual", state }
+  });
+  assert.equal(assistant.status, 503);
+
   const changed = await request("/api/change-password", {
     method: "POST",
     token: login.body.token,

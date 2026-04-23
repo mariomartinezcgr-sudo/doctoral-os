@@ -21,6 +21,8 @@ La app tambien puede abrirse como `index.html` con `localStorage`, pero la v1 co
 
 En Railway no hace falta definir `HOST` manualmente: el servidor escucha por defecto en `0.0.0.0`.
 
+Para activar el asistente con IA real, define `OPENAI_API_KEY`. Opcionalmente puedes fijar `OPENAI_MODEL` y por defecto usa `gpt-5.4-mini`.
+
 ## Modulos incluidos
 
 - Panel general orientado a tres acciones: escribir capitulo, planificar semana y resolver comentarios.
@@ -29,6 +31,7 @@ En Railway no hace falta definir `HOST` manualmente: el servidor escucha por def
 - Plan semanal tipo tablero.
 - Reuniones y revision en una sola vista.
 - Bitacora de escritura.
+- Asistente de tesis con modo local y, si configuras OpenAI, respuestas con IA y acciones sobre tareas y reuniones.
 - Cuenta, sincronizacion y exportacion de respaldo.
 
 ## Archivos

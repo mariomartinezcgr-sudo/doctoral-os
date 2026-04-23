@@ -11,6 +11,9 @@ const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH |
 const SQLITE_PATH = path.join(DATA_DIR, "doctoralos.sqlite");
 const LEGACY_DB_PATH = path.join(DATA_DIR, "db.json");
 const MAX_BODY = 2 * 1024 * 1024;
+const OPENAI_API_URL = "https://api.openai.com/v1/responses";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const ASSISTANT_THREAD_LIMIT = 16;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -168,6 +171,34 @@ async function handleApi(req, res) {
     const savedAt = saveUserState(auth.user.id, sanitizeState(body.state));
     updateUserTimestamp(auth.user.id, savedAt);
     sendJson(res, 200, { ok: true, savedAt });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/assistant") {
+    const auth = requireUser(req, res);
+    if (!auth) return;
+    const body = await readJson(req);
+    const message = String(body.message || "").trim();
+    if (!message) {
+      sendJson(res, 400, { error: "Escribe un mensaje para el asistente." });
+      return;
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      sendJson(res, 503, { error: "El asistente IA todavia no esta configurado en el servidor." });
+      return;
+    }
+
+    try {
+      const baseState = body.state && typeof body.state === "object" ? body.state : getUserState(auth.user.id);
+      const assistantState = normalizeAssistantState(cloneJson(baseState || {}));
+      const result = await runAssistantWithOpenAI(auth.user, assistantState, message);
+      const savedAt = saveUserState(auth.user.id, result.state);
+      updateUserTimestamp(auth.user.id, savedAt);
+      sendJson(res, 200, { ok: true, reply: result.reply, state: result.state, savedAt, model: result.model, mode: "openai" });
+    } catch (error) {
+      console.error("Assistant error", error);
+      sendJson(res, 502, { error: "El asistente IA no pudo responder ahora mismo." });
+    }
     return;
   }
 
@@ -411,4 +442,348 @@ function isValidEmail(email) {
 function sanitizeState(state) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return {};
   return state;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+function normalizeAssistantState(state) {
+  const next = sanitizeState(state);
+  next.project = next.project && typeof next.project === "object" ? next.project : {};
+  next.chapters = Array.isArray(next.chapters) ? next.chapters : [];
+  next.readings = Array.isArray(next.readings) ? next.readings : [];
+  next.tasks = Array.isArray(next.tasks) ? next.tasks : [];
+  next.meetings = Array.isArray(next.meetings) ? next.meetings : [];
+  next.reviewComments = Array.isArray(next.reviewComments) ? next.reviewComments : [];
+  next.writingLog = Array.isArray(next.writingLog) ? next.writingLog : [];
+  next.assistantThread = Array.isArray(next.assistantThread) ? next.assistantThread : [];
+  return next;
+}
+
+async function runAssistantWithOpenAI(user, state, message) {
+  const assistantState = normalizeAssistantState(state);
+  const conversation = buildAssistantConversationInput(assistantState.assistantThread);
+  const lastMessage = conversation[conversation.length - 1];
+  if (!lastMessage || lastMessage.role !== "user" || String(lastMessage.content || "").trim() !== message) {
+    conversation.push({ role: "user", content: message });
+  }
+  const requestInput = [
+    { role: "developer", content: buildAssistantPrompt(user, assistantState) },
+    ...conversation
+  ];
+
+  let response = await openAIResponsesCreate({
+    model: OPENAI_MODEL,
+    input: requestInput,
+    tools: assistantTools(),
+    tool_choice: "auto",
+    reasoning: { effort: "low" }
+  });
+
+  for (let step = 0; step < 4; step += 1) {
+    const calls = extractFunctionCalls(response);
+    if (!calls.length) {
+      const reply = extractAssistantText(response) || "Puedo ayudarte mejor si me pides una accion concreta o una duda de tesis.";
+      assistantState.assistantThread.push(createAssistantMessage("assistant", reply));
+      assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
+      return { reply, state: assistantState, model: response.model || OPENAI_MODEL };
+    }
+
+    const outputs = calls.map((call) => ({
+      type: "function_call_output",
+      call_id: call.call_id,
+      output: JSON.stringify(executeAssistantTool(assistantState, call))
+    }));
+
+    response = await openAIResponsesCreate({
+      model: OPENAI_MODEL,
+      previous_response_id: response.id,
+      input: outputs
+    });
+  }
+
+  const fallbackReply = "He intentado procesarlo, pero necesito que reformules la peticion en una sola accion concreta.";
+  assistantState.assistantThread.push(createAssistantMessage("assistant", fallbackReply));
+  assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
+  return { reply: fallbackReply, state: assistantState, model: OPENAI_MODEL };
+}
+
+async function openAIResponsesCreate(payload) {
+  const response = await fetch(OPENAI_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + process.env.OPENAI_API_KEY
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data && data.error && data.error.message ? data.error.message : "OpenAI devolvio " + response.status;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function buildAssistantPrompt(user, state) {
+  const context = buildAssistantContext(state);
+  return [
+    "Eres el asistente de DoctoralOS, una app SaaS para doctorandos individuales.",
+    "Responde siempre en espanol, con tono claro, practico y breve.",
+    "Tu trabajo es ayudar a terminar la tesis con menos caos.",
+    "Si el usuario pide crear una tarea o agendar una reunion dentro de la app, usa las herramientas disponibles.",
+    "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
+    "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
+    "Si no hace falta herramienta, responde con consejo accionable y concreto.",
+    "Usuario actual: " + user.name + " (" + user.email + ")",
+    "Contexto de tesis actual: " + JSON.stringify(context)
+  ].join("\n\n");
+}
+
+function buildAssistantConversationInput(thread) {
+  return (Array.isArray(thread) ? thread : [])
+    .slice(-ASSISTANT_THREAD_LIMIT)
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: String(message.text || "")
+    }));
+}
+
+function buildAssistantContext(state) {
+  return {
+    project: {
+      name: state.project && state.project.name || "",
+      candidate: state.project && state.project.candidate || "",
+      question: state.project && state.project.question || "",
+      contribution: state.project && state.project.contribution || "",
+      mode: state.project && state.project.mode || "",
+      phase: state.project && state.project.phase || "",
+      writingTarget: Number(state.project && state.project.writingTarget || 0)
+    },
+    chapters: state.chapters.slice(0, 8).map((chapter) => ({
+      title: chapter.title || "",
+      status: chapter.status || "",
+      progress: Number(chapter.progress || 0),
+      due: chapter.due || "",
+      words: Number(chapter.words || 0),
+      target: Number(chapter.target || 0),
+      sections: Array.isArray(chapter.sections) ? chapter.sections.length : 0,
+      checklistOpen: Array.isArray(chapter.checklist) ? chapter.checklist.filter((item) => !item.done).length : 0
+    })),
+    tasks: state.tasks.slice(0, 12).map((task) => ({
+      title: task.title || "",
+      area: task.area || "",
+      status: task.status || "",
+      due: task.due || "",
+      effort: task.effort || "",
+      impact: task.impact || ""
+    })),
+    meetings: state.meetings.slice(0, 8).map((meeting) => ({
+      date: meeting.date || "",
+      time: meeting.time || "",
+      type: meeting.type || "",
+      attendees: meeting.attendees || "",
+      agenda: meeting.agenda || ""
+    })),
+    reviewComments: state.reviewComments.slice(0, 10).map((comment) => ({
+      chapter: comment.chapter || "",
+      source: comment.source || "",
+      status: comment.status || "",
+      priority: comment.priority || "",
+      due: comment.due || ""
+    })),
+    writing: {
+      last7DaysWords: wordsWrittenLastDays(state.writingLog, 7),
+      sessionsLast7Days: sessionsLastDays(state.writingLog, 7)
+    }
+  };
+}
+
+function assistantTools() {
+  return [
+    {
+      type: "function",
+      name: "create_task",
+      description: "Crea una tarea dentro del tablero semanal de DoctoralOS.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string", description: "Titulo claro de la tarea." },
+          due: { type: "string", description: "Fecha limite en formato YYYY-MM-DD o cadena vacia si no hay fecha." },
+          area: { type: "string", description: "Area de trabajo, por ejemplo Capitulos, Revision, Lecturas, Reuniones o General." },
+          status: { type: "string", enum: ["today", "week", "later"], description: "Columna del tablero." },
+          effort: { type: "string", description: "Esfuerzo estimado, por ejemplo 45 min o 2 h." },
+          impact: { type: "string", enum: ["Bajo", "Medio", "Alto"], description: "Impacto esperado." }
+        },
+        required: ["title", "due", "area", "status", "effort", "impact"]
+      }
+    },
+    {
+      type: "function",
+      name: "create_meeting",
+      description: "Agenda una reunion dentro de DoctoralOS.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          date: { type: "string", description: "Fecha de la reunion en formato YYYY-MM-DD." },
+          time: { type: "string", description: "Hora de la reunion en formato HH:MM de 24 horas." },
+          type: { type: "string", description: "Tipo de reunion, por ejemplo Direccion, Comite, Grupo o Revision interna." },
+          attendees: { type: "string", description: "Personas asistentes." },
+          agenda: { type: "string", description: "Tema o agenda principal." }
+        },
+        required: ["date", "time", "type", "attendees", "agenda"]
+      }
+    }
+  ];
+}
+
+function extractFunctionCalls(response) {
+  return (Array.isArray(response && response.output) ? response.output : [])
+    .filter((item) => item.type === "function_call")
+    .map((item) => ({
+      name: item.name,
+      arguments: item.arguments,
+      call_id: item.call_id || item.id
+    }))
+    .filter((item) => item.name && item.call_id);
+}
+
+function extractAssistantText(response) {
+  if (typeof (response && response.output_text) === "string" && response.output_text.trim()) {
+    return response.output_text.trim();
+  }
+
+  const chunks = [];
+  for (const item of Array.isArray(response && response.output) ? response.output : []) {
+    if (item.type !== "message") continue;
+    for (const content of Array.isArray(item.content) ? item.content : []) {
+      if (typeof content.text === "string" && content.text.trim()) chunks.push(content.text.trim());
+    }
+  }
+  return chunks.join("\n\n").trim();
+}
+
+function executeAssistantTool(state, call) {
+  const args = parseJsonObject(call.arguments);
+
+  if (call.name === "create_task") {
+    const title = String(args.title || "").trim();
+    const due = normalizeIsoDate(args.due);
+    if (!title) return { ok: false, error: "La tarea necesita un titulo." };
+    if (args.due && !due) return { ok: false, error: "La fecha de la tarea debe ir en formato YYYY-MM-DD." };
+
+    const task = {
+      id: createEntityId("tk"),
+      title,
+      area: String(args.area || "General").trim() || "General",
+      status: ["today", "week", "later"].includes(args.status) ? args.status : inferTaskStatusFromDue(due),
+      due,
+      effort: String(args.effort || "45 min").trim() || "45 min",
+      impact: ["Bajo", "Medio", "Alto"].includes(args.impact) ? args.impact : "Medio"
+    };
+    state.tasks.unshift(task);
+    return { ok: true, task };
+  }
+
+  if (call.name === "create_meeting") {
+    const date = normalizeIsoDate(args.date);
+    const time = normalizeTime(args.time);
+    if (!date) return { ok: false, error: "La reunion necesita una fecha valida YYYY-MM-DD." };
+    if (!time) return { ok: false, error: "La reunion necesita una hora valida HH:MM." };
+
+    const meeting = {
+      id: createEntityId("mt"),
+      date,
+      time,
+      type: String(args.type || "Direccion").trim() || "Direccion",
+      attendees: String(args.attendees || "").trim(),
+      agenda: String(args.agenda || "Seguimiento de tesis").trim() || "Seguimiento de tesis",
+      decisions: "",
+      tasks: "",
+      next: ""
+    };
+    state.meetings.unshift(meeting);
+    return { ok: true, meeting };
+  }
+
+  return { ok: false, error: "Herramienta desconocida: " + call.name };
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function normalizeIsoDate(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+}
+
+function normalizeTime(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{2}:\d{2}$/.test(text)) return "";
+  const parts = text.split(":").map(Number);
+  if (parts[0] > 23 || parts[1] > 59) return "";
+  return text;
+}
+
+function inferTaskStatusFromDue(due) {
+  if (!due) return "week";
+  const diff = dayDistance(due);
+  if (diff <= 1) return "today";
+  if (diff <= 7) return "week";
+  return "later";
+}
+
+function dayDistance(date) {
+  const target = new Date(date + "T00:00:00Z");
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  return Math.round((target - today) / 86400000);
+}
+
+function wordsWrittenLastDays(log, days) {
+  const cutoff = Date.now() - days * 86400000;
+  return (Array.isArray(log) ? log : []).reduce((sum, entry) => {
+    const stamp = new Date(String(entry.date || "") + "T00:00:00").getTime();
+    if (!Number.isFinite(stamp) || stamp < cutoff) return sum;
+    return sum + Number(entry.words || 0);
+  }, 0);
+}
+
+function sessionsLastDays(log, days) {
+  const cutoff = Date.now() - days * 86400000;
+  return (Array.isArray(log) ? log : []).filter((entry) => {
+    const stamp = new Date(String(entry.date || "") + "T00:00:00").getTime();
+    return Number.isFinite(stamp) && stamp >= cutoff;
+  }).length;
+}
+
+function createAssistantMessage(role, text) {
+  return {
+    id: createEntityId("msg"),
+    role,
+    text,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function trimAssistantThread(thread) {
+  if (!Array.isArray(thread) || thread.length <= 28) return Array.isArray(thread) ? thread : [];
+  const first = thread[0];
+  return [first, ...thread.slice(-27)];
+}
+
+function createEntityId(prefix) {
+  return prefix + "-" + crypto.randomUUID();
 }

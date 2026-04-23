@@ -18,9 +18,11 @@ El proyecto ya incluye:
 3. Elige Deploy from GitHub Repo.
 4. Selecciona el repositorio de DoctoralOS.
 5. En variables, anade NODE_ENV=production.
-6. Crea un volumen persistente para el servicio.
-7. Monta el volumen en /app/data.
-8. Espera al despliegue y abre la URL publica.
+6. Para activar IA real en el asistente, anade OPENAI_API_KEY.
+7. Opcional: fija OPENAI_MODEL=gpt-5.4-mini o el modelo que prefieras.
+8. Crea un volumen persistente para el servicio.
+9. Monta el volumen en /app/data.
+10. Espera al despliegue y abre la URL publica.
 
 ## Comprobacion
 
