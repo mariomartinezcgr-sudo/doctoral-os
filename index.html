@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DoctoralOS - App v1</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navegacion principal">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">D</div>
+          <div>
+            <strong>DoctoralOS</strong>
+            <span>Termina tu tesis</span>
+          </div>
+        </div>
+
+        <nav class="main-nav" id="mainNav">
+          <button class="nav-item is-active" data-view="dashboard" type="button">
+            <span class="nav-icon" data-icon="dashboard"></span>
+            <span>Panel</span>
+          </button>
+          <button class="nav-item" data-view="chapters" type="button">
+            <span class="nav-icon" data-icon="chapters"></span>
+            <span>Capitulos</span>
+          </button>
+          <button class="nav-item" data-view="literature" type="button">
+            <span class="nav-icon" data-icon="book"></span>
+            <span>Lecturas</span>
+          </button>
+          <button class="nav-item" data-view="planner" type="button">
+            <span class="nav-icon" data-icon="calendar"></span>
+            <span>Plan semanal</span>
+          </button>
+          <button class="nav-item" data-view="reviews" type="button">
+            <span class="nav-icon" data-icon="review"></span>
+            <span>Reuniones y revision</span>
+          </button>
+          <button class="nav-item" data-view="writing" type="button">
+            <span class="nav-icon" data-icon="writing"></span>
+            <span>Escritura</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="mini-stat">
+            <span>Progreso global</span>
+            <strong id="sidebarProgress">0%</strong>
+          </div>
+          <div class="mini-stat">
+            <span>Proxima entrega</span>
+            <strong id="sidebarDue">-</strong>
+          </div>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Sistema de trabajo doctoral</p>
+            <h1 id="viewTitle">Panel</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="sync-pill" id="syncStatus" data-action="sync-now" type="button">Local</button>
+            <button class="ghost-button auth-button" id="authButton" data-action="auth-open" type="button">
+              <span data-icon="check"></span>
+              <span id="authLabel">Cuenta</span>
+            </button>
+            <button class="icon-button" id="logoutButton" data-action="logout" type="button" aria-label="Cerrar sesion" hidden>
+              <span data-icon="arrow"></span>
+            </button>
+            <button class="icon-button" data-action="print" type="button" aria-label="Imprimir vista">
+              <span data-icon="print"></span>
+            </button>
+            <button class="icon-button" data-action="export" type="button" aria-label="Exportar respaldo">
+              <span data-icon="download"></span>
+            </button>
+            <label class="icon-button file-action" aria-label="Importar datos">
+              <span data-icon="upload"></span>
+              <input id="importFile" type="file" accept="application/json">
+            </label>
+          </div>
+        </header>
+
+        <main id="screen" class="screen" tabindex="-1"></main>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <div class="auth-modal" id="authModal" hidden>
+      <div class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">Cuenta y sincronizacion</p>
+            <h2 id="authTitle">Entrar en DoctoralOS</h2>
+            <p>Con una cuenta, la tesis se guarda en el backend local y puede sincronizarse entre navegadores o dispositivos que accedan a este servidor.</p>
+          </div>
+          <button class="icon-button" data-action="auth-close" type="button" aria-label="Cerrar">
+            <span data-icon="check"></span>
+          </button>
+        </div>
+
+        <div class="auth-grid">
+          <form class="form-panel form-grid" data-auth-form="login">
+            <h3>Iniciar sesion</h3>
+            <div class="field">
+              <label for="loginEmail">Email</label>
+              <input id="loginEmail" name="email" type="email" autocomplete="email" required>
+            </div>
+            <div class="field">
+              <label for="loginPassword">Contrasena</label>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+            </div>
+            <button class="button" type="submit">Entrar y sincronizar</button>
+          </form>
+
+          <form class="form-panel form-grid" data-auth-form="register">
+            <h3>Crear cuenta</h3>
+            <div class="field">
+              <label for="registerName">Nombre</label>
+              <input id="registerName" name="name" type="text" autocomplete="name">
+            </div>
+            <div class="field">
+              <label for="registerEmail">Email</label>
+              <input id="registerEmail" name="email" type="email" autocomplete="email" required>
+            </div>
+            <div class="field">
+              <label for="registerPassword">Contrasena</label>
+              <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
+            </div>
+            <button class="button" type="submit">Crear y sincronizar</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "doctoral-os",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DoctoralOS v1 web app with local backend, accounts and synced thesis state.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node tests/backend.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
