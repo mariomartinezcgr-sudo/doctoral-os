@@ -1695,3 +1695,126 @@ tr:last-child td {
     height: 25px;
   }
 }
+
+
+/* Assistant chat */
+.assistant-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 360px;
+  gap: 18px;
+  align-items: start;
+}
+
+.assistant-panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.assistant-header {
+  padding: 18px 18px 0;
+  margin-bottom: 0;
+}
+
+.assistant-thread {
+  display: grid;
+  gap: 12px;
+  max-height: 66vh;
+  overflow: auto;
+  padding: 18px;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, #fbfcfd 0%, #f5f8fa 100%);
+}
+
+.assistant-message {
+  max-width: min(720px, 88%);
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(27, 38, 45, 0.06);
+}
+
+.assistant-message.is-user {
+  margin-left: auto;
+  border-color: #c6ddd8;
+  background: var(--teal-soft);
+}
+
+.assistant-message.is-assistant {
+  margin-right: auto;
+}
+
+.assistant-message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.assistant-message-head strong {
+  font-size: 0.92rem;
+}
+
+.assistant-message-head span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.assistant-message-body {
+  color: #334047;
+  line-height: 1.55;
+}
+
+.assistant-composer {
+  padding: 16px 18px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.assistant-composer textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.assistant-sidebar {
+  display: grid;
+  gap: 18px;
+}
+
+.assistant-suggestion-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-suggestion {
+  width: 100%;
+  min-height: 48px;
+  justify-content: flex-start;
+  padding: 12px 14px;
+  white-space: normal;
+  text-align: left;
+}
+
+@media (max-width: 1180px) {
+  .assistant-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-sidebar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .assistant-sidebar {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-thread {
+    max-height: none;
+  }
+}

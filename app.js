@@ -11,7 +11,7 @@ const DEFAULT_CHECKLIST_ITEMS = [
   "Conclusion responde al objetivo",
   "Pendientes convertidos en tareas"
 ];
-const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing"];
+const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing", "assistant"];
 
 const icons = {
   dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 13h6V4H4v9Z"/><path d="M14 20h6V4h-6v16Z"/><path d="M4 20h6v-3H4v3Z"/></svg>',
@@ -21,6 +21,7 @@ const icons = {
   meeting: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M2 21a5 5 0 0 1 10 0"/><path d="M14 21a4 4 0 0 1 8 0"/></svg>',
   review: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 4h11l3 3v13H5V4Z"/><path d="M16 4v4h4"/><path d="M8 12h8"/><path d="M8 16h5"/><path d="m14 19 2 2 4-5"/></svg>',
   writing: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 20h16"/><path d="M6 16 17.5 4.5a2.1 2.1 0 0 1 3 3L9 19l-4 1 1-4Z"/></svg>',
+  assistant: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 18h4l4 3v-3h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>',
   print: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-5h18v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7v-7Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M4 3h16"/></svg>',
@@ -38,6 +39,7 @@ const viewTitles = {
   planner: "Plan semanal",
   reviews: "Reuniones y revision",
   writing: "Escritura",
+  assistant: "Asistente",
 };
 
 const defaultState = {
@@ -61,7 +63,8 @@ const defaultState = {
   tasks: [],
   meetings: [],
   reviewComments: [],
-  writingLog: []
+  writingLog: [],
+  assistantThread: []
 };
 
 let state = loadState();
@@ -126,6 +129,13 @@ function ensureStateShape(target) {
   target.meetings = Array.isArray(target.meetings) ? target.meetings : [];
   target.reviewComments = Array.isArray(target.reviewComments) ? target.reviewComments : [];
   target.writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
+  target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
+  target.meetings.forEach((meeting) => {
+    meeting.time = meeting.time || "";
+  });
+  if (!target.assistantThread.length) {
+    target.assistantThread = createInitialAssistantThread();
+  }
   delete target.phases;
   delete target.risks;
   delete target.evidence;
@@ -172,7 +182,8 @@ function createFreshState(user = {}) {
     tasks: [],
     meetings: [],
     reviewComments: [],
-    writingLog: []
+    writingLog: [],
+    assistantThread: createInitialAssistantThread()
   });
 }
 
@@ -510,6 +521,18 @@ function handleScreenClick(event) {
     return;
   }
 
+  if (action === "assistant-suggest") {
+    submitAssistantPrompt(target.dataset.message || "");
+    return;
+  }
+
+  if (action === "assistant-clear") {
+    state.assistantThread = createInitialAssistantThread();
+    saveState("Conversacion reiniciada");
+    render();
+    return;
+  }
+
   if (action === "chapter-status") {
     updateChapterStatus(id, target.dataset.value);
   }
@@ -646,6 +669,12 @@ function handleFormSubmit(event) {
   const data = Object.fromEntries(new FormData(form).entries());
   const formType = form.dataset.form;
 
+  if (formType === "assistant") {
+    submitAssistantPrompt(String(data.message || ""));
+    form.reset();
+    return;
+  }
+
   if (formType === "project") {
     state.project = { ...state.project, ...data };
     state.project.writingTarget = Number(data.writingTarget || state.project.writingTarget);
@@ -744,6 +773,7 @@ function handleFormSubmit(event) {
     state.meetings.unshift({
       id: createId("mt"),
       date: data.date || new Date().toISOString().slice(0, 10),
+      time: data.time || "",
       type: data.type || "Direccion",
       attendees: data.attendees || "",
       agenda: data.agenda || "",
@@ -821,7 +851,8 @@ function render() {
     literature: renderLiterature,
     planner: renderPlanner,
     reviews: renderReviews,
-    writing: renderWriting
+    writing: renderWriting,
+    assistant: renderAssistant
   };
 
   (renderers[state.activeView] || renderers.dashboard)();
@@ -859,6 +890,7 @@ function renderDashboard() {
             <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Escribir capitulo</button>
             <button class="ghost-button" data-action="go" data-view="planner" type="button"><span data-icon="calendar"></span>Planificar semana</button>
             <button class="ghost-button" data-action="go" data-view="reviews" type="button"><span data-icon="review"></span>Resolver comentarios</button>
+            <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir consejo</button>
           </div>
         </div>
         <div class="progress-orbit" style="--value: ${overallProgress()}%">
@@ -1284,7 +1316,7 @@ function renderReviews() {
         ${latest ? `
           <article class="panel">
             <p class="card-kicker">Ultima reunion</p>
-            <h2>${formatDate(latest.date)} &middot; ${escapeHtml(latest.type)}</h2>
+            <h2>${escapeHtml(formatMeetingLabel(latest))}</h2>
             <p><strong>Decisiones:</strong> ${escapeHtml(latest.decisions)}</p>
             <p><strong>Tareas:</strong> ${escapeHtml(latest.tasks)}</p>
             <div class="generated-box">${escapeHtml(generateMeetingEmail(latest))}</div>
@@ -1308,7 +1340,7 @@ function renderReviews() {
             <article class="meeting-note">
               <div class="list-row-header">
                 <div>
-                  <strong>${formatDate(meeting.date)} &middot; ${escapeHtml(meeting.type)}</strong>
+                  <strong>${escapeHtml(formatMeetingLabel(meeting))}</strong>
                   <div class="meeting-meta muted">${escapeHtml(meeting.attendees)} &middot; proxima ${formatDate(meeting.next)}</div>
                 </div>
                 <button class="tiny-button" data-action="delete-meeting" data-id="${meeting.id}" type="button"><span data-icon="trash"></span></button>
@@ -1327,6 +1359,7 @@ function renderReviews() {
           <form class="form-grid" data-form="meeting">
             <div class="inline-fields">
               ${field("Fecha", "date", "date", new Date().toISOString().slice(0, 10), true)}
+              ${field("Hora", "time", "time", "")}
               ${selectField("Tipo", "type", ["Direccion", "Comite", "Grupo", "Revision interna"])}
             </div>
             ${field("Asistentes", "attendees", "input", "Director/a, codirector/a")}
@@ -1423,6 +1456,432 @@ function renderWriting() {
       </aside>
     </section>
   `;
+}
+
+function renderAssistant() {
+  const suggestions = assistantSuggestions();
+
+  screen.innerHTML = `
+    <section class="assistant-layout">
+      <div class="assistant-panel">
+        <div class="section-header assistant-header">
+          <div>
+            <p class="eyebrow">Asistente interno</p>
+            <h2>Preguntas, consejo y acciones directas</h2>
+            <p>Puedes pedirme resumen, prioridades o escribir cosas como "Agendar reunion el viernes a las 16:00 con directora sobre metodologia".</p>
+          </div>
+          <button class="ghost-button" data-action="assistant-clear" type="button"><span data-icon="trash"></span>Reiniciar chat</button>
+        </div>
+
+        <div class="assistant-thread">
+          ${state.assistantThread.map((message) => renderAssistantMessage(message)).join("")}
+        </div>
+
+        <form class="assistant-composer" data-form="assistant">
+          ${field("Escribe tu mensaje", "message", "textarea", "Ejemplo: Crear tarea enviar borrador del capitulo 2 para manana")}
+          <div class="summary-actions">
+            <button class="button" type="submit"><span data-icon="plus"></span>Enviar</button>
+          </div>
+        </form>
+      </div>
+
+      <aside class="assistant-sidebar">
+        <div class="form-panel">
+          <h2>Pruebas utiles</h2>
+          <div class="assistant-suggestion-grid">
+            ${suggestions.map((item) => `<button class="ghost-button assistant-suggestion" data-action="assistant-suggest" data-message="${escapeAttribute(item)}" type="button">${escapeHtml(item)}</button>`).join("")}
+          </div>
+        </div>
+
+        <article class="card">
+          <p class="card-kicker">Puede hacer ahora</p>
+          <h2>Lo mas util en esta v1</h2>
+          <ul class="quality-list compact-list">
+            <li>Resumir progreso y detectar cuellos de botella</li>
+            <li>Priorizar la semana segun tareas, comentarios y fechas</li>
+            <li>Crear tareas desde lenguaje natural</li>
+            <li>Agendar reuniones con fecha y hora</li>
+            <li>Dar consejo practico sobre un capitulo concreto</li>
+          </ul>
+        </article>
+      </aside>
+    </section>`;
+}
+
+function renderAssistantMessage(message) {
+  const isUser = message.role === "user";
+  return `
+    <article class="assistant-message ${isUser ? "is-user" : "is-assistant"}">
+      <div class="assistant-message-head">
+        <strong>${isUser ? "Tu" : "Asistente"}</strong>
+        <span>${formatDateTime(message.createdAt)}</span>
+      </div>
+      <div class="assistant-message-body">${escapeMultiline(message.text)}</div>
+    </article>`;
+}
+
+function createInitialAssistantThread() {
+  return [
+    createAssistantEntry(
+      "assistant",
+      "Soy el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.\n\nPrueba algo como:\n- Que deberia priorizar esta semana\n- Crear tarea cerrar comentarios del capitulo 2 para manana\n- Agendar reunion el viernes a las 16:00 con directora sobre metodologia"
+    )
+  ];
+}
+
+function createAssistantEntry(role, text) {
+  return {
+    id: createId("msg"),
+    role,
+    text,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function assistantSuggestions() {
+  return [
+    "Que deberia priorizar esta semana",
+    "Resumeme el progreso actual",
+    "Agendar reunion el viernes a las 16:00 con directora sobre metodologia",
+    "Crear tarea cerrar comentarios del capitulo 2 para manana"
+  ];
+}
+
+function submitAssistantPrompt(message) {
+  const text = String(message || "").trim();
+  if (!text) {
+    showToast("Escribe una pregunta o una accion");
+    return;
+  }
+
+  state.assistantThread.push(createAssistantEntry("user", text));
+  const result = buildAssistantReply(text);
+  state.assistantThread.push(createAssistantEntry("assistant", result.reply));
+  pruneAssistantThread();
+  saveState(result.toastMessage || "");
+  render();
+}
+
+function pruneAssistantThread() {
+  if (state.assistantThread.length <= 28) return;
+  const first = state.assistantThread[0];
+  state.assistantThread = [first, ...state.assistantThread.slice(-27)];
+}
+
+function buildAssistantReply(message) {
+  const normalized = normalizeUserText(message);
+
+  if (/^(hola|buenas|hey|hi)\b/.test(normalized)) {
+    return { reply: "Hola. Estoy dentro de tu espacio de tesis y puedo ayudarte con prioridades, capitulos, tareas y reuniones. Si quieres, empieza por preguntarme que deberias hacer esta semana." };
+  }
+
+  if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
+  if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
+  if (isMeetingCreationRequest(normalized)) return createMeetingFromPrompt(message);
+  if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
+  if (isMeetingAdviceRequest(normalized)) return { reply: buildMeetingAdvice() };
+
+  const chapter = findChapterFromPrompt(message);
+  if (chapter) return { reply: buildChapterAdvice(chapter) };
+
+  return {
+    reply: "Puedo ayudarte con cuatro cosas muy utiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resumeme el progreso actual\n- Que deberia priorizar esta semana\n- Crear tarea enviar borrador del capitulo 2 para manana\n- Agendar reunion el martes a las 16:00 con directora sobre metodologia"
+  };
+}
+
+function isSummaryRequest(normalized) {
+  return normalized.includes("resumen") || normalized.includes("resumeme") || normalized.includes("resume") || normalized.includes("progreso") || normalized.includes("estado general");
+}
+
+function isWeeklyPriorityRequest(normalized) {
+  return normalized.includes("esta semana") || normalized.includes("priorizar") || normalized.includes("prioridad") || normalized.includes("por donde empiezo") || normalized.includes("que hago") || normalized.includes("que deberia hacer");
+}
+
+function isMeetingCreationRequest(normalized) {
+  return (normalized.includes("reunion") || normalized.includes("agendar") || normalized.includes("agenda")) && (normalized.includes("crea") || normalized.includes("programa") || normalized.includes("agendar") || normalized.includes("agenda"));
+}
+
+function isTaskCreationRequest(normalized) {
+  return normalized.includes("tarea") || normalized.includes("recuerdame") || normalized.includes("recordame") || normalized.includes("anade") || normalized.includes("agrega");
+}
+
+function isMeetingAdviceRequest(normalized) {
+  return normalized.includes("reunion") && (normalized.includes("que llevo") || normalized.includes("preparar") || normalized.includes("agenda recomendada"));
+}
+
+function buildProgressSummary() {
+  const openTasks = state.tasks.filter((task) => task.status !== "later").length;
+  const pendingComments = state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
+  const wordsThisWeek = writingWordsLastDays(7);
+  const nextMeeting = upcomingMeeting();
+  const lines = [
+    `- ${state.chapters.length} capitulos registrados con un progreso medio del ${overallProgress()}%.`,
+    `- ${openTasks} tareas activas y ${pendingComments} comentarios abiertos.`,
+    `- ${state.meetings.length} reuniones registradas.`,
+    `- ${formatNumber(wordsThisWeek)} palabras escritas en los ultimos 7 dias.`
+  ];
+  if (nextMeeting) lines.push(`- Proxima reunion detectada: ${formatMeetingLabel(nextMeeting)}.`);
+  return `Resumen actual:
+${lines.join("\n")}\n\nMi siguiente recomendacion: ${recommendNextMove()}`;
+}
+
+function buildWeeklyPriorities() {
+  const lines = [];
+  const urgentComment = [...state.reviewComments]
+    .filter((comment) => comment.status !== "Resuelto")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+  const urgentTask = [...state.tasks]
+    .filter((task) => task.status !== "later")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+  const chapter = nextChapterToPush();
+  if (urgentTask) lines.push(`- Tarea prioritaria: ${urgentTask.title}${urgentTask.due ? ` antes del ${formatDate(urgentTask.due)}` : ""}.`);
+  if (urgentComment) lines.push(`- Cierra el comentario de ${urgentComment.chapter}${urgentComment.due ? ` antes del ${formatDate(urgentComment.due)}` : ""}.`);
+  if (chapter) lines.push(`- Empuja ${chapter.title}: esta cerca de entrega y va por ${chapter.progress}% de avance.`);
+  if (!lines.length) lines.push("- Crea un capitulo activo o una tarea semanal para empezar a mover la tesis.");
+  return `Te propongo este foco para la semana:
+${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revision y una administrativa como maximo.`;
+}
+
+function buildMeetingAdvice() {
+  const nextMeeting = upcomingMeeting();
+  const chapter = nextChapterToPush();
+  const urgentComment = [...state.reviewComments].find((comment) => comment.status !== "Resuelto");
+  if (!nextMeeting) {
+    return "No veo ninguna reunion futura registrada. Si quieres, puedo agendar una desde aqui con una frase como: Agendar reunion el martes a las 16:00 con directora sobre marco teorico.";
+  }
+  const lines = [
+    `- Estado del capitulo mas sensible: ${chapter ? `${chapter.title} (${chapter.progress}% de avance)` : "elige un capitulo principal"}.`,
+    "- Una decision que necesitas cerrar, no solo avances.",
+    urgentComment ? `- Respuesta propuesta al comentario abierto de ${urgentComment.chapter}.` : "- Una lista corta de bloqueos concretos.",
+    "- Proximo entregable con fecha realista."
+  ];
+  return `Para la reunion de ${formatMeetingLabel(nextMeeting)} yo llevaria esto:
+${lines.join("\n")}`;
+}
+
+function findChapterFromPrompt(message) {
+  const normalized = normalizeUserText(message);
+  if (!normalized.includes("capitulo")) return null;
+  const numberMatch = normalized.match(/capitulo\s+(\d+)/);
+  if (numberMatch) {
+    const chapter = state.chapters[Number(numberMatch[1]) - 1];
+    if (chapter) return chapter;
+  }
+  return state.chapters.find((chapter) => normalized.includes(normalizeUserText(chapter.title))) || null;
+}
+
+function buildChapterAdvice(chapter) {
+  const nextSection = [...chapter.sections].sort((a, b) => Number(a.words || 0) - Number(b.words || 0))[0];
+  const openCheck = chapter.checklist.find((item) => !item.done);
+  const lines = [
+    `- Estado actual: ${chapter.status} y ${chapter.progress}% de progreso.`,
+    `- Siguiente movimiento recomendado: ${nextSection ? `trabajar la seccion "${nextSection.title}"` : "cerrar una seccion concreta"}.`,
+    `- Control de calidad: ${openCheck ? openCheck.label : "el checklist esta bastante bien cubierto"}.`,
+    "- Consejo practico: no abras mas frentes; intenta dejar hoy una decision cerrada o un parrafo completo."
+  ];
+  return `Sobre ${chapter.title}:\n${lines.join("\n")}`;
+}
+
+function createMeetingFromPrompt(message) {
+  const date = extractDateFromText(message);
+  const time = extractTimeFromText(message);
+  if (!date) return { reply: "Puedo agendarla, pero me falta la fecha. Prueba: Agendar reunion el viernes a las 16:00 con directora sobre metodologia." };
+  if (!time) return { reply: "Puedo crear la reunion, pero me falta la hora. Prueba: Agendar reunion el viernes a las 16:00 con directora sobre metodologia." };
+  const attendees = extractAttendees(message);
+  const agenda = extractTopic(message) || "Seguimiento de tesis";
+  const type = inferMeetingType(attendees, agenda);
+  state.meetings.unshift({
+    id: createId("mt"),
+    date,
+    time,
+    type,
+    attendees,
+    agenda,
+    decisions: "",
+    tasks: "",
+    next: ""
+  });
+  return {
+    reply: `Listo. He agendado una reunion para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. La he guardado en Reuniones y revision.`,
+    toastMessage: "Reunion creada desde el asistente"
+  };
+}
+
+function createTaskFromPrompt(message) {
+  const title = extractTaskTitle(message);
+  if (!title) return { reply: "Puedo crear la tarea, pero necesito una accion concreta. Ejemplo: Crear tarea enviar borrador del capitulo 2 para manana." };
+  const due = extractDateFromText(message);
+  const impact = extractImpact(message);
+  const effort = extractEffort(message);
+  const area = inferTaskArea(message);
+  const status = inferTaskColumn(due);
+  state.tasks.unshift({
+    id: createId("tk"),
+    title,
+    area,
+    status,
+    due,
+    effort,
+    impact
+  });
+  return {
+    reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Despues"}.`,
+    toastMessage: "Tarea creada desde el asistente"
+  };
+}
+
+function recommendNextMove() {
+  const urgentComment = [...state.reviewComments]
+    .filter((comment) => comment.status !== "Resuelto")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+  if (urgentComment) return `cerrar el comentario abierto de ${urgentComment.chapter}`;
+  const urgentTask = [...state.tasks]
+    .filter((task) => task.status !== "later")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+  if (urgentTask) return `terminar la tarea ${urgentTask.title}`;
+  const chapter = nextChapterToPush();
+  if (chapter) return `empujar ${chapter.title} y cerrar una seccion concreta`;
+  return "crear el primer capitulo y planificar tres tareas para esta semana";
+}
+
+function nextChapterToPush() {
+  return [...state.chapters].sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")) || Number(a.progress || 0) - Number(b.progress || 0))[0] || null;
+}
+
+function upcomingMeeting() {
+  const today = todayISO();
+  return [...state.meetings]
+    .filter((meeting) => meeting.date && meeting.date >= today)
+    .sort((a, b) => `${a.date} ${a.time || "23:59"}`.localeCompare(`${b.date} ${b.time || "23:59"}`))[0] || null;
+}
+
+function normalizeUserText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractDateFromText(text) {
+  const raw = String(text || "");
+  const normalized = normalizeUserText(raw);
+  let match = raw.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  match = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (match) return `${match[3]}-${String(match[2]).padStart(2, "0")}-${String(match[1]).padStart(2, "0")}`;
+  if (normalized.includes("pasado manana")) return offsetISODate(2);
+  if (/\bmanana\b/.test(normalized)) return offsetISODate(1);
+  if (/\bhoy\b/.test(normalized)) return offsetISODate(0);
+  const weekday = normalized.match(/\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/);
+  if (weekday) return nextWeekdayISO(weekday[1]);
+  return "";
+}
+
+function extractTimeFromText(text) {
+  const raw = String(text || "");
+  let match = raw.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (match) return `${String(match[1]).padStart(2, "0")}:${match[2]}`;
+  match = raw.match(/\ba las\s+(\d{1,2})(?:[:h.](\d{2}))?\b/i);
+  if (match) return `${String(match[1]).padStart(2, "0")}:${String(match[2] || "00").padStart(2, "0")}`;
+  match = raw.match(/\b(\d{1,2})h\b/i);
+  if (match) return `${String(match[1]).padStart(2, "0")}:00`;
+  return "";
+}
+
+function extractAttendees(text) {
+  const match = String(text || "").match(/\bcon\s+([^,.]+?)(?=\s+(?:sobre|para|el|la|a las|a la)\b|$)/i);
+  return match ? match[1].trim() : "";
+}
+
+function extractTopic(text) {
+  const match = String(text || "").match(/\b(?:sobre|para)\s+([^,.]+?)(?=\s+(?:con|el|la|a las|a la)\b|$)/i);
+  return match ? match[1].trim() : "";
+}
+
+function inferMeetingType(attendees, agenda) {
+  const normalized = normalizeUserText(`${attendees} ${agenda}`);
+  if (normalized.includes("director") || normalized.includes("directora")) return "Direccion";
+  if (normalized.includes("comite")) return "Comite";
+  if (normalized.includes("grupo")) return "Grupo";
+  return "Revision interna";
+}
+
+function extractTaskTitle(text) {
+  let title = String(text || "").trim();
+  title = title.replace(/^(crear|crea|anade|añade|agrega|programa|planifica|recuerdame|recordame)(?:\s+una)?(?:\s+nueva)?\s*tarea[: ]*/i, "");
+  title = title.replace(/^tarea[: ]*/i, "");
+  title = title.replace(/\s+(?:para|el|hoy|manana|mañana|pasado manana|pasado mañana|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|prioridad|impacto)\b[\s\S]*$/i, "");
+  return title.trim().replace(/\.$/, "");
+}
+
+function extractImpact(text) {
+  const normalized = normalizeUserText(text);
+  if (normalized.includes("alta") || normalized.includes("alto")) return "Alto";
+  if (normalized.includes("baja") || normalized.includes("bajo")) return "Bajo";
+  return "Medio";
+}
+
+function extractEffort(text) {
+  const match = String(text || "").match(/\b(\d{1,3})\s*(min|hora|horas|h)\b/i);
+  if (!match) return "45 min";
+  const amount = Number(match[1]);
+  return /hora|horas|h/i.test(match[2]) ? `${amount} h` : `${amount} min`;
+}
+
+function inferTaskArea(text) {
+  const normalized = normalizeUserText(text);
+  if (normalized.includes("capitulo") || normalized.includes("borrador") || normalized.includes("escribir")) return "Capitulos";
+  if (normalized.includes("comentario") || normalized.includes("revision")) return "Revision";
+  if (normalized.includes("lectura") || normalized.includes("fuente")) return "Lecturas";
+  if (normalized.includes("reunion")) return "Reuniones";
+  return "General";
+}
+
+function inferTaskColumn(due) {
+  if (!due) return "week";
+  const diff = daysUntil(due);
+  if (diff <= 1) return "today";
+  if (diff <= 7) return "week";
+  return "later";
+}
+
+function daysUntil(date) {
+  const target = new Date(`${date}T00:00:00`);
+  const today = new Date(`${todayISO()}T00:00:00`);
+  return Math.round((target - today) / 86400000);
+}
+
+function offsetISODate(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function nextWeekdayISO(dayName) {
+  const week = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  const current = date.getDay();
+  let diff = (week[dayName] - current + 7) % 7;
+  if (diff === 0) diff = 7;
+  date.setDate(date.getDate() + diff);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatMeetingLabel(meeting) {
+  return `${formatDate(meeting.date)}${meeting.time ? ` · ${meeting.time}` : ""} · ${meeting.type}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function escapeMultiline(value) {
+  return escapeHtml(value).replaceAll("\n", "<br>");
 }
 
 function metric(label, value, hint) {
