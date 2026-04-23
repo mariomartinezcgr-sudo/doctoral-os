@@ -17,7 +17,7 @@ El proyecto ya incluye:
 2. En Railway, crea New Project.
 3. Elige Deploy from GitHub Repo.
 4. Selecciona el repositorio de DoctoralOS.
-5. En variables, anade HOST=0.0.0.0 y NODE_ENV=production.
+5. En variables, anade NODE_ENV=production.
 6. Crea un volumen persistente para el servicio.
 7. Monta el volumen en /app/data.
 8. Espera al despliegue y abre la URL publica.

@@ -19,6 +19,8 @@ Luego abre:
 
 La app tambien puede abrirse como `index.html` con `localStorage`, pero la v1 comercial usa cuenta y sincronizacion.
 
+En Railway no hace falta definir `HOST` manualmente: el servidor escucha por defecto en `0.0.0.0`.
+
 ## Modulos incluidos
 
 - Panel general orientado a tres acciones: escribir capitulo, planificar semana y resolver comentarios.
