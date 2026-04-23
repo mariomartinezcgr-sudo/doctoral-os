@@ -13,54 +13,136 @@
         <span><strong>DoctoralOS</strong><small>Termina tu tesis</small></span>
       </a>
       <nav>
-        <a href="/pricing.html">Precios</a>
-        <a href="/help.html">Ayuda</a>
-        <a href="/app" class="button">Entrar</a>
+        <a href="#que-es">Que es</a>
+        <a href="#precios">Precios</a>
+        <a href="#preguntas">Preguntas</a>
+        <a href="#contacto">Contacto</a>
+        <a href="/app?auth=login" class="ghost-button">Iniciar sesion</a>
+        <a href="/app?auth=register" class="button">Crear cuenta</a>
       </nav>
     </header>
 
     <main>
-      <section class="marketing-hero">
+      <section class="marketing-hero marketing-hero-auth">
         <div class="hero-copy">
           <p class="eyebrow">Para doctorandos individuales</p>
-          <h1>DoctoralOS</h1>
-          <p>Organiza capitulos, plan semanal, reuniones, comentarios y escritura para avanzar hacia una tesis terminada.</p>
+          <h1>Termina la tesis con menos caos</h1>
+          <p>DoctoralOS es una app web para organizar capitulos, plan semanal, reuniones, comentarios y escritura en un solo sistema de trabajo.</p>
           <div class="summary-actions">
-            <a class="button" href="/app">Empezar ahora</a>
-            <a class="ghost-button" href="/help.html">Ver como funciona</a>
+            <a class="button" href="/app?auth=register">Crear cuenta</a>
+            <a class="ghost-button" href="/app?auth=login">Iniciar sesion</a>
+            <a class="ghost-button" href="#precios">Ver precios</a>
           </div>
         </div>
-        <div class="hero-product" aria-hidden="true">
-          <div class="hero-product-top"></div>
-          <div class="hero-product-grid">
-            <span></span><span></span><span></span>
-            <span></span><span></span><span></span>
+
+        <aside class="hero-auth-card">
+          <p class="card-kicker">Empieza aqui</p>
+          <h2>Una sola cuenta, un solo espacio de trabajo</h2>
+          <div class="auth-link-grid">
+            <a class="auth-link-card" href="/app?auth=login">
+              <strong>Iniciar sesion</strong>
+              <span>Entra en tu tesis y continua donde lo dejaste.</span>
+            </a>
+            <a class="auth-link-card" href="/app?auth=register">
+              <strong>Crear cuenta</strong>
+              <span>Abre tu espacio y empieza con capitulos, plan y revision.</span>
+            </a>
           </div>
-          <div class="hero-product-lines">
-            <i></i><i></i><i></i><i></i>
-          </div>
+          <ul class="quality-list compact-list">
+            <li>Cuenta y sincronizacion entre sesiones</li>
+            <li>Capitulos, tareas, reuniones y comentarios en un mismo lugar</li>
+            <li>Exportacion de respaldo y documentos de privacidad</li>
+          </ul>
+        </aside>
+      </section>
+
+      <section class="marketing-section" id="que-es">
+        <div class="marketing-section-head">
+          <p class="eyebrow">Que es DoctoralOS</p>
+          <h2>Una v1 pensada para terminar, no para distraer</h2>
+          <p>La app se centra en el trabajo diario de tesis: escribir, planificar, registrar feedback y mantener el progreso visible.</p>
+        </div>
+        <div class="marketing-card-grid">
+          <article>
+            <h3>Capitulos</h3>
+            <p>Editor con secciones, notas internas y checklist de calidad para cada capitulo.</p>
+          </article>
+          <article>
+            <h3>Plan semanal</h3>
+            <p>Tareas concretas con prioridad y fecha para mover la tesis cada semana.</p>
+          </article>
+          <article>
+            <h3>Revision</h3>
+            <p>Reuniones, acuerdos y comentarios en una sola vista para cerrar pendientes.</p>
+          </article>
         </div>
       </section>
 
-      <section class="marketing-band">
-        <article>
-          <h2>La v1 se centra en terminar</h2>
-          <p>Sin pantallas extra ni promesas vagas: solo el sistema diario que sostiene una tesis.</p>
-        </article>
-        <article>
-          <h2>Flujo simple</h2>
-          <p>Crea capitulos, planifica la semana, registra reuniones, resuelve comentarios y mide escritura.</p>
-        </article>
-        <article>
-          <h2>Datos tuyos</h2>
-          <p>Cuenta sincronizada, exportacion de respaldo y documentos claros de privacidad y seguridad.</p>
+      <section class="marketing-section" id="precios">
+        <div class="marketing-section-head">
+          <p class="eyebrow">Precios</p>
+          <h2>Un plan simple para doctorandos individuales</h2>
+          <p>La v1 comercial minima se ofrece como una cuenta personal con acceso completo a la app web.</p>
+        </div>
+        <section class="pricing-card pricing-card-inline">
+          <p class="card-kicker">Doctorando individual</p>
+          <h2>9 EUR / mes</h2>
+          <p>Incluye capitulos, plan semanal, reuniones, revision, escritura, lecturas basicas, cuenta y exportacion de respaldo.</p>
+          <div class="summary-actions">
+            <a class="button" href="/app?auth=register">Crear cuenta</a>
+            <a class="ghost-button" href="/pricing.html">Ver detalle</a>
+          </div>
+        </section>
+      </section>
+
+      <section class="marketing-section" id="preguntas">
+        <div class="marketing-section-head">
+          <p class="eyebrow">Preguntas frecuentes</p>
+          <h2>Lo esencial antes de entrar</h2>
+        </div>
+        <div class="faq-grid">
+          <article class="faq-item">
+            <h3>Que hace exactamente DoctoralOS</h3>
+            <p>Te da un sistema de trabajo para la tesis: capitulos, planificacion, reuniones, comentarios y escritura en un mismo sitio.</p>
+          </article>
+          <article class="faq-item">
+            <h3>Sirve para equipos o directores</h3>
+            <p>No en esta v1. Esta version esta pensada para doctorandos individuales.</p>
+          </article>
+          <article class="faq-item">
+            <h3>Mis datos se pueden exportar</h3>
+            <p>Si. Puedes exportar un respaldo completo del estado de tu tesis en JSON.</p>
+          </article>
+          <article class="faq-item">
+            <h3>Hace bibliografia avanzada o IA generativa</h3>
+            <p>No. La v1 evita complejidad extra y se centra en organizar y terminar la tesis.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="marketing-section" id="contacto">
+        <div class="marketing-section-head">
+          <p class="eyebrow">Contacto</p>
+          <h2>Habla con nosotros</h2>
+          <p>Para dudas, soporte o feedback inicial sobre la v1.</p>
+        </div>
+        <article class="contact-card">
+          <p><strong>Email:</strong> <a href="mailto:soporte@doctoral-os.local">soporte@doctoral-os.local</a></p>
+          <div class="contact-links">
+            <a href="/PRIVACY.md">Privacidad</a>
+            <a href="/TERMS.md">Terminos</a>
+            <a href="/SECURITY.md">Seguridad</a>
+            <a href="/help.html">Como funciona</a>
+          </div>
         </article>
       </section>
     </main>
+
     <footer class="marketing-footer">
-      <a href="/PRIVACY.md">Privacidad</a>
-      <a href="/TERMS.md">Terminos</a>
-      <a href="/SECURITY.md">Seguridad</a>
+      <a href="/app?auth=login">Iniciar sesion</a>
+      <a href="/app?auth=register">Crear cuenta</a>
+      <a href="#precios">Precios</a>
+      <a href="#preguntas">Preguntas</a>
       <a href="mailto:soporte@doctoral-os.local">Contacto</a>
     </footer>
   </body>

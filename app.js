@@ -98,7 +98,7 @@ function init() {
   screen.addEventListener("input", handleScreenInput);
   render();
   updateAuthUI();
-  restoreSession();
+  restoreSession().finally(() => maybeOpenAuthFromUrl());
 }
 
 function hydrateIcons(root = document) {
@@ -290,14 +290,24 @@ function updateAuthUI() {
   logoutButton.hidden = true;
 }
 
-function openAuthModal() {
+function maybeOpenAuthFromUrl() {
+  const url = new URL(window.location.href);
+  const intent = url.searchParams.get("auth");
+  if (!intent || auth.user) return;
+  openAuthModal(intent === "register" ? "register" : "login");
+  url.searchParams.delete("auth");
+  window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+}
+
+function openAuthModal(intent = "login") {
   if (!API_ENABLED) {
     showToast("Abre la app desde http://localhost para usar cuentas");
     return;
   }
   authModal.hidden = false;
   hydrateIcons(authModal);
-  authModal.querySelector("input")?.focus();
+  const focusTarget = intent === "register" ? "#registerName" : "#loginEmail";
+  authModal.querySelector(focusTarget)?.focus();
 }
 
 function closeAuthModal() {
