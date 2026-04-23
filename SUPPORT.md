@@ -2,7 +2,7 @@
 
 ## Contacto
 
-soporte@doctoral-os.local
+mario.martinez.cgr@gmail.com
 
 ## Incidencias prioritarias
 
