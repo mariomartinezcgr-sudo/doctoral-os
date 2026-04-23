@@ -1548,3 +1548,150 @@ tr:last-child td {
     justify-content: center;
   }
 }
+
+
+/* Final brand polish */
+.brand-mark::before,
+.brand-mark::after {
+  content: none;
+}
+
+.brand-mark {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #1c262d 0%, #162026 100%);
+  color: inherit;
+  font-size: 0;
+  box-shadow: 0 12px 24px rgba(16, 24, 29, 0.22);
+}
+
+.brand-mark svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.marketing-page {
+  background: linear-gradient(180deg, #fafcfd 0%, #f3f6f8 100%);
+}
+
+.marketing-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom-color: #e2e8ec;
+  background: rgba(250, 252, 253, 0.9);
+}
+
+.marketing-nav nav {
+  gap: 18px;
+}
+
+.marketing-nav nav a:not(.button):not(.ghost-button) {
+  color: #55626b;
+  font-weight: 600;
+}
+
+.marketing-nav nav a:not(.button):not(.ghost-button):hover,
+.marketing-nav nav a:not(.button):not(.ghost-button):focus-visible {
+  color: var(--ink);
+}
+
+.marketing-brand .brand-mark {
+  border-color: #d2dbe0;
+  background: linear-gradient(180deg, #1b252c 0%, #223039 100%);
+  box-shadow: 0 10px 22px rgba(27, 38, 45, 0.1);
+}
+
+.marketing-brand strong {
+  letter-spacing: 0;
+}
+
+.hero-copy {
+  max-width: 40rem;
+}
+
+.hero-copy h1,
+.marketing-simple h1 {
+  font-size: clamp(2.8rem, 6vw, 4.9rem);
+  line-height: 1;
+}
+
+.hero-copy p {
+  max-width: 54ch;
+  color: #4f5c64;
+  font-size: 1.05rem;
+}
+
+.marketing-hero-auth {
+  padding-top: clamp(42px, 7vw, 92px);
+  padding-bottom: 44px;
+}
+
+.hero-auth-card {
+  gap: 18px;
+  padding: 24px;
+  border-color: #d7e0e5;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+  box-shadow: 0 20px 44px rgba(20, 30, 35, 0.08);
+}
+
+.auth-link-card {
+  min-height: 128px;
+  border-color: #dae2e7;
+  background: #f8fbfc;
+}
+
+.auth-link-card:hover,
+.auth-link-card:focus-visible {
+  border-color: #bfd5d1;
+  background: #ffffff;
+}
+
+.marketing-section {
+  padding-bottom: 58px;
+}
+
+.marketing-section-head {
+  margin-bottom: 24px;
+}
+
+.marketing-section-head h2 {
+  font-size: clamp(1.85rem, 4vw, 2.6rem);
+  margin-bottom: 12px;
+}
+
+.marketing-card-grid article,
+.faq-item,
+.contact-card,
+.pricing-card-inline {
+  border-color: #d9e1e6;
+  box-shadow: 0 12px 32px rgba(25, 38, 44, 0.06);
+}
+
+.contact-links a,
+.marketing-footer a {
+  color: #55626b;
+}
+
+.contact-links a:hover,
+.contact-links a:focus-visible,
+.marketing-footer a:hover,
+.marketing-footer a:focus-visible {
+  color: var(--ink);
+}
+
+@media (max-width: 560px) {
+  .marketing-brand .brand-mark {
+    width: 42px;
+    height: 42px;
+  }
+
+  .brand-mark svg {
+    width: 25px;
+    height: 25px;
+  }
+}
