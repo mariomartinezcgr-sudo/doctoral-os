@@ -4,7 +4,7 @@ Version comercial minima de una app SaaS para ayudar a doctorandos individuales 
 
 ## Como abrirlo
 
-Requiere Node.js 22.5 o superior, porque el backend usa SQLite nativo.
+Requiere Node.js 22 o superior. En despliegue se arranca con `--experimental-sqlite` para activar SQLite nativo en Node 22.
 
 Arranca el backend:
 

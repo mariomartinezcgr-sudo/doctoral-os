@@ -4,11 +4,11 @@
   "private": true,
   "description": "DoctoralOS v1 web app with local backend, accounts and synced thesis state.",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node --experimental-sqlite server.js",
+    "dev": "node --experimental-sqlite server.js",
     "test": "node tests/backend.test.js"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": "22"
   }
 }
