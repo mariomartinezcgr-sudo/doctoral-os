@@ -1,14 +1,16 @@
 const STORAGE_KEY = "doctoral-os-state-v1";
+const DEMO_STORAGE_KEY = "doctoral-os-demo-state-v1";
 const TOKEN_KEY = "doctoral-os-token-v1";
+const DEMO_QUERY_PARAM = "demo";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
 const DEFAULT_CHECKLIST_ITEMS = [
-  "Objetivo del capitulo explicito",
+  "Objetivo del capítulo explícito",
   "Argumento central defendible",
-  "Secciones ordenadas de forma logica",
-  "Cada afirmacion fuerte tiene fuente o apoyo",
+  "Secciones ordenadas de forma lógica",
+  "Cada afirmación fuerte tiene fuente o apoyo",
   "Conceptos clave definidos antes de usarse",
   "Transiciones entre secciones claras",
-  "Conclusion responde al objetivo",
+  "Conclusión responde al objetivo",
   "Pendientes convertidos en tareas"
 ];
 const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing", "assistant"];
@@ -34,10 +36,10 @@ const icons = {
 
 const viewTitles = {
   dashboard: "Panel",
-  chapters: "Capitulos",
+  chapters: "Capítulos",
   literature: "Lecturas",
   planner: "Plan semanal",
-  reviews: "Reuniones y revision",
+  reviews: "Reuniones y revisión",
   writing: "Escritura",
   assistant: "Asistente",
 };
@@ -67,6 +69,7 @@ const defaultState = {
   assistantThread: []
 };
 
+let demoMode = isDemoRequested();
 let state = loadState();
 let auth = {
   token: localStorage.getItem(TOKEN_KEY) || "",
@@ -114,13 +117,27 @@ function hydrateIcons(root = document) {
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return ensureStateShape(structuredClone(defaultState));
-    return ensureStateShape(deepMerge(structuredClone(defaultState), JSON.parse(raw)));
+    const raw = localStorage.getItem(activeStorageKey());
+    if (!raw) return ensureStateShape(demoMode ? createDemoState() : structuredClone(defaultState));
+    return ensureStateShape(deepMerge(demoMode ? createDemoState() : structuredClone(defaultState), JSON.parse(raw)));
   } catch (error) {
     console.warn("No se pudo cargar el estado", error);
-    return ensureStateShape(structuredClone(defaultState));
+    return ensureStateShape(demoMode ? createDemoState() : structuredClone(defaultState));
   }
+}
+
+function isDemoRequested() {
+  return new URL(window.location.href).searchParams.get(DEMO_QUERY_PARAM) === "1";
+}
+
+function activeStorageKey() {
+  return demoMode ? DEMO_STORAGE_KEY : STORAGE_KEY;
+}
+
+function clearDemoQuery() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(DEMO_QUERY_PARAM);
+  window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 }
 
 function ensureStateShape(target) {
@@ -186,6 +203,167 @@ function createFreshState(user = {}) {
     writingLog: [],
     assistantThread: createInitialAssistantThread()
   });
+}
+
+function createDemoState() {
+  const currentYear = new Date().getFullYear();
+  const chapter1 = normalizeChapter({
+    id: createId("ch"),
+    title: "Introduccion y problema de investigacion",
+    goal: "Situar el problema, justificar su relevancia y abrir la pregunta doctoral.",
+    argument: "La continuidad semanal condiciona mas el avance doctoral que la mera acumulacion de lecturas.",
+    status: "En revision",
+    progress: 78,
+    words: 6900,
+    target: 8500,
+    due: demoDateOffset(12),
+    tasks: ["Reforzar el cierre del apartado 1.3", "Ajustar la transicion hacia la pregunta doctoral"],
+    sections: [
+      { id: createId("sec"), title: "1. Contexto del problema", goal: "Mostrar por que el tema importa", status: "Cerrada", words: 2100, content: "Las trayectorias doctorales muestran interrupciones frecuentes cuando el trabajo semanal no esta claramente definido." },
+      { id: createId("sec"), title: "2. Pregunta y objetivos", goal: "Definir la pregunta doctoral", status: "En revision", words: 2500, content: "La pregunta central conecta continuidad de trabajo, seguimiento y cierre de revision." },
+      { id: createId("sec"), title: "3. Aporte esperado", goal: "Presentar la contribucion", status: "Borrador", words: 2300, content: "El capitulo plantea un modelo de coordinacion doctoral centrado en continuidad semanal." }
+    ],
+    notes: [
+      { id: createId("nt"), title: "Abrir con dato de abandono", type: "Idea", date: demoDateOffset(-3), text: "Valorar si el primer parrafo debe abrir con un dato sobre abandono o con una escena de trabajo doctoral fragmentado." }
+    ],
+    checklist: createDefaultChecklist(78)
+  });
+
+  const chapter2 = normalizeChapter({
+    id: createId("ch"),
+    title: "Marco teorico y modelo de continuidad",
+    goal: "Unir literatura sobre autorregulacion, escritura y seguimiento doctoral.",
+    argument: "El trabajo doctoral mejora cuando el seguimiento semanal convierte feedback y escritura en ciclos cerrables.",
+    status: "Borrador",
+    progress: 62,
+    words: 9100,
+    target: 12000,
+    due: demoDateOffset(24),
+    tasks: ["Cerrar mapa conceptual final", "Reducir duplicacion entre secciones 2.2 y 2.3"],
+    sections: [
+      { id: createId("sec"), title: "1. Autorregulacion doctoral", goal: "Revisar literatura base", status: "En revision", words: 3000, content: "La autorregulacion aparece como capacidad de mantener objetivos visibles y trabajo recurrente." },
+      { id: createId("sec"), title: "2. Sistemas de seguimiento", goal: "Conectar herramientas y continuidad", status: "Borrador", words: 2800, content: "No basta con registrar tareas; importa que cada ciclo deje una siguiente accion clara." },
+      { id: createId("sec"), title: "3. Modelo propuesto", goal: "Presentar el modelo", status: "Borrador", words: 3300, content: "El modelo articula capitulos, plan semanal, revision y escritura en un circuito continuo." }
+    ],
+    notes: [
+      { id: createId("nt"), title: "Revisar termino continuidad", type: "Decision", date: demoDateOffset(-2), text: "Mantener continuidad como termino central y no cambiarlo por consistencia para no diluir la idea de seguimiento semanal." }
+    ],
+    checklist: createDefaultChecklist(62)
+  });
+
+  const chapter3 = normalizeChapter({
+    id: createId("ch"),
+    title: "Metodo y decisiones de muestreo",
+    goal: "Explicar muestra, instrumentos y criterio analitico.",
+    argument: "La validez del estudio depende de justificar bien la muestra y el criterio de seguimiento del trabajo doctoral.",
+    status: "Borrador",
+    progress: 47,
+    words: 6400,
+    target: 9000,
+    due: demoDateOffset(8),
+    tasks: ["Justificar tamano de muestra", "Cerrar tabla de participantes", "Reescribir limites del estudio"],
+    sections: [
+      { id: createId("sec"), title: "1. Diseno general", goal: "Presentar enfoque del estudio", status: "Cerrada", words: 1900, content: "Se adopta un enfoque cualitativo con seguimiento longitudinal del trabajo doctoral." },
+      { id: createId("sec"), title: "2. Muestra y criterios", goal: "Justificar participantes", status: "En revision", words: 2200, content: "La seccion necesita afinar la razon del numero final de participantes y su heterogeneidad." },
+      { id: createId("sec"), title: "3. Analisis", goal: "Explicar codificacion y decisiones", status: "Borrador", words: 2300, content: "Conviene conectar mejor codificacion, categorias y pregunta principal." }
+    ],
+    notes: [
+      { id: createId("nt"), title: "Aclarar por que 18 casos", type: "Duda", date: demoDateOffset(-1), text: "La directora quiere una justificacion mas clara del tamano final de muestra y del criterio de saturacion." }
+    ],
+    checklist: createDefaultChecklist(47)
+  });
+
+  const chapter4 = normalizeChapter({
+    id: createId("ch"),
+    title: "Resultados preliminares",
+    goal: "Mostrar primeros patrones sobre continuidad y bloqueo.",
+    argument: "Los datos apuntan a que la continuidad semanal depende mas del cierre de revision que del volumen de escritura aislado.",
+    status: "Esquema",
+    progress: 24,
+    words: 2800,
+    target: 10000,
+    due: demoDateOffset(39),
+    tasks: ["Definir estructura de hallazgos", "Abrir subapartado sobre interrupciones"],
+    sections: [
+      { id: createId("sec"), title: "1. Patrones generales", goal: "Presentar primeros hallazgos", status: "Esquema", words: 1200, content: "Los hallazgos se estan organizando todavia en torno a continuidad, bloqueo y respuesta al feedback." },
+      { id: createId("sec"), title: "2. Casos comparados", goal: "Comparar perfiles", status: "Esquema", words: 900, content: "Falta decidir si esta seccion se organiza por perfiles o por momentos de tesis." },
+      { id: createId("sec"), title: "3. Implicaciones", goal: "Conectar resultados y discusion", status: "Esquema", words: 700, content: "Esta parte aun esta muy abierta y depende del cierre del capitulo metodologico." }
+    ],
+    notes: [],
+    checklist: createDefaultChecklist(24)
+  });
+
+  return ensureStateShape({
+    activeView: "dashboard",
+    editorChapterId: chapter3.id,
+    literatureFilter: "",
+    project: {
+      name: "Continuidad doctoral en plataformas de seguimiento",
+      candidate: "Marta Rios",
+      program: "Doctorado en Educacion y Tecnologia",
+      university: "Universitat Autonoma de Barcelona",
+      mode: "Monografica",
+      phase: "Escritura y revision",
+      writingTarget: 68000,
+      question: "Como influye un sistema de seguimiento semanal en la continuidad real del trabajo doctoral?",
+      contribution: "Modelo practico para coordinar capitulos, revision y escritura en tesis individuales.",
+      scope: "Estudio cualitativo con entrevistas, diario de escritura y seguimiento longitudinal."
+    },
+    chapters: [chapter1, chapter2, chapter3, chapter4],
+    readings: [
+      { id: createId("rd"), title: "Doctoral writing as regulated work", authors: "Hernandez, M.", year: "2024", status: "Clave", chapter: chapter2.title, use: "Sostener el modelo de continuidad semanal y autorregulacion.", doi: "10.1200/dw-2024-11" },
+      { id: createId("rd"), title: "Feedback loops in supervision", authors: "Gibson, L.; Patel, R.", year: "2023", status: "Leido", chapter: chapter1.title, use: "Justificar por que el feedback necesita cierre y seguimiento.", doi: "10.9981/fls-2023-07" },
+      { id: createId("rd"), title: "Qualitative sampling in doctoral studies", authors: "Santos, P.", year: "2022", status: "Leyendo", chapter: chapter3.title, use: "Reforzar la justificacion del tamano de muestra.", doi: "10.7751/qs-2022-04" },
+      { id: createId("rd"), title: "Academic progress dashboards", authors: "Lopez, A.; Green, T.", year: "2025", status: "Pendiente", chapter: chapter4.title, use: "Conectar resultados con herramientas de seguimiento academico.", doi: "10.8841/apd-2025-02" }
+    ],
+    tasks: [
+      { id: createId("tk"), title: "Cerrar respuesta al comentario sobre muestra", area: "Revision", status: "today", due: demoDateOffset(1), effort: "45 min", impact: "Alto" },
+      { id: createId("tk"), title: "Preparar agenda de reunion con directora", area: "Reuniones", status: "today", due: demoDateOffset(0), effort: "30 min", impact: "Alto" },
+      { id: createId("tk"), title: "Redactar cierre del marco teorico", area: "Capítulos", status: "week", due: demoDateOffset(4), effort: "90 min", impact: "Alto" },
+      { id: createId("tk"), title: "Vincular tres lecturas clave al capitulo metodologico", area: "Lecturas", status: "later", due: demoDateOffset(11), effort: "60 min", impact: "Medio" }
+    ],
+    meetings: [
+      { id: createId("mt"), date: demoDateOffset(3), time: "16:00", type: "Direccion", attendees: "Directora", agenda: "Metodo y criterios de muestreo", decisions: "Llegar con una justificacion mas explicita del tamano de muestra y una tabla final de participantes.", tasks: "Reescribir apartado 2.2 y llevar una agenda de 5 puntos.", next: demoDateOffset(17) },
+      { id: createId("mt"), date: demoDateOffset(-5), time: "11:30", type: "Direccion", attendees: "Directora", agenda: "Revision del marco teorico", decisions: "Reducir repeticion conceptual y cerrar mejor el paso a metodologia.", tasks: "Ajustar secciones 2.2 y 2.3; preparar transicion a capitulo 3.", next: demoDateOffset(3) }
+    ],
+    reviewComments: [
+      { id: createId("rv"), chapter: chapter3.title, source: "Direccion", comment: "Falta justificar el tamano de muestra y explicar por que 18 casos son suficientes.", response: "Anadir criterio de saturacion y justificar heterogeneidad de perfiles.", status: "Pendiente", priority: "Alta", due: demoDateOffset(2) },
+      { id: createId("rv"), chapter: chapter2.title, source: "Direccion", comment: "La transicion entre autorregulacion y seguimiento todavia suena teoricamente separada.", response: "Reescribir cierre del apartado 2.2 y abrir mejor el 2.3.", status: "En proceso", priority: "Media", due: demoDateOffset(5) },
+      { id: createId("rv"), chapter: chapter1.title, source: "Direccion", comment: "Conviene hacer mas explicita la pregunta doctoral al final de la introduccion.", response: "Nueva version enviada en la reunion pasada.", status: "Resuelto", priority: "Media", due: demoDateOffset(-2) }
+    ],
+    writingLog: [
+      { id: createId("wr"), date: demoDateOffset(-1), chapter: chapter3.title, words: 780, minutes: 95, mood: "Revision", note: "Reescrito el apartado de criterios de inclusion y dejado una duda clara sobre saturacion." },
+      { id: createId("wr"), date: demoDateOffset(-2), chapter: chapter2.title, words: 920, minutes: 110, mood: "Fluido", note: "Cerrado el mapa de conceptos y mejorada la conexion con seguimiento semanal." },
+      { id: createId("wr"), date: demoDateOffset(-4), chapter: chapter1.title, words: 540, minutes: 70, mood: "Neutral", note: "Ajustado el cierre de la introduccion y marcada una nota para abrir con un dato mas fuerte." },
+      { id: createId("wr"), date: demoDateOffset(-6), chapter: chapter2.title, words: 680, minutes: 80, mood: "Trabado", note: "Sesion lenta por duplicacion entre apartados; queda tarea clara para la semana." }
+    ],
+    assistantThread: [
+      { id: createId("msg"), role: "assistant", text: "Esta es una demo guiada de DoctoralOS. Puedes recorrer una tesis de ejemplo, pedir un resumen del estado y crear acciones dentro de la demo.", createdAt: demoTimestamp(-1, 9, 6) },
+      { id: createId("msg"), role: "user", text: "Resúmeme el progreso actual", createdAt: demoTimestamp(-1, 9, 7) },
+      { id: createId("msg"), role: "assistant", text: `Resumen actual:
+- 4 capitulos registrados con un progreso medio del 53%.
+- 3 tareas activas y 2 comentarios abiertos.
+- 2 reuniones registradas.
+- 2920 palabras escritas en los ultimos 7 dias.
+- Proxima reunion detectada: 27/04/${currentYear} 16:00 con Directora.
+
+Mi siguiente recomendacion: cerrar el comentario abierto del capitulo metodologico antes de la reunion.`, createdAt: demoTimestamp(-1, 9, 8) }
+    ]
+  });
+}
+
+function demoDateOffset(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function demoTimestamp(days, hour, minute) {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
 }
 
 function normalizeChapter(chapter) {
@@ -263,7 +441,7 @@ function deepMerge(base, saved) {
 
 function saveState(message = "Guardado", options = {}) {
   ensureStateShape(state);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(activeStorageKey(), JSON.stringify(state));
   updateSidebar();
   if (!options.skipSync) scheduleSync();
   if (message) showToast(message);
@@ -296,9 +474,11 @@ function updateAuthUI() {
     return;
   }
 
-  syncStatus.textContent = auth.status === "offline" ? "Backend offline" : "Local";
-  syncStatus.title = "Inicia sesion para sincronizar entre dispositivos.";
-  authLabel.textContent = "Cuenta";
+  syncStatus.textContent = demoMode ? "Demo guiada" : auth.status === "offline" ? "Backend offline" : "Local";
+  syncStatus.title = demoMode
+    ? "Estas recorriendo una tesis de ejemplo. Crea cuenta para empezar la tuya."
+    : "Inicia sesion para sincronizar entre dispositivos.";
+  authLabel.textContent = demoMode ? "Crear cuenta" : "Cuenta";
   logoutButton.hidden = true;
 }
 
@@ -412,6 +592,10 @@ function applySession(result) {
   auth.status = "synced";
   auth.lastSync = shortTime();
   auth.statusLabel = "Sincronizado";
+  if (demoMode) {
+    demoMode = false;
+    clearDemoQuery();
+  }
   if (auth.token) localStorage.setItem(TOKEN_KEY, auth.token);
   updateAuthUI();
 }
@@ -530,6 +714,15 @@ function handleScreenClick(event) {
   if (action === "assistant-clear") {
     state.assistantThread = createInitialAssistantThread();
     saveState("Conversacion reiniciada");
+    render();
+    return;
+  }
+
+  if (action === "exit-demo") {
+    demoMode = false;
+    clearDemoQuery();
+    state = loadState();
+    saveState("Demo cerrada", { skipSync: true });
     render();
     return;
   }
@@ -874,12 +1067,26 @@ function renderDashboard() {
   const pendingComments = state.reviewComments.filter((item) => item.status !== "Resuelto").length;
   const wordsThisWeek = writingWordsLastDays(7);
   const hasStarted = state.chapters.length || state.tasks.length || state.meetings.length || state.reviewComments.length;
+  const demoBanner = demoMode ? `
+    <section class="demo-banner panel">
+      <div>
+        <p class="card-kicker">Demo guiada</p>
+        <h2>Estas viendo una tesis de ejemplo ya preparada para ensenar el producto</h2>
+        <p>Recorre el panel, abre el capitulo metodologico, revisa comentarios y prueba el asistente. Cuando quieras pasar a trabajo real, crea tu cuenta.</p>
+      </div>
+      <div class="summary-actions">
+        <a class="button" href="/app?auth=register">Crear cuenta</a>
+        <button class="ghost-button" data-action="exit-demo" type="button">Salir demo</button>
+      </div>
+    </section>
+  ` : "";
 
   screen.innerHTML = `
+    ${demoBanner}
     <section class="hero-panel">
       <div class="panel project-summary">
         <div>
-          <p class="eyebrow">V1 comercial minima &middot; foco en terminar</p>
+          <p class="eyebrow">${demoMode ? "Demo guiada de producto" : "Sistema de trabajo doctoral"}</p>
           <h2>${escapeHtml(state.project.name)}</h2>
           <p>${escapeHtml(state.project.question || "Convierte la tesis en capitulos, tareas semanales, reuniones utiles y sesiones de escritura medibles.")}</p>
           <div class="badge-row">
@@ -903,7 +1110,7 @@ function renderDashboard() {
       </div>
 
       <div class="panel">
-        <p class="card-kicker">Siguiente accion</p>
+        <p class="card-kicker">Siguiente foco</p>
         <h2>${nextTask ? escapeHtml(nextTask.title) : hasStarted ? "Elige una tarea para esta semana" : "Crea tu primer capitulo"}</h2>
         <p>${nextTask ? `Vence: ${formatDate(nextTask.due)}. Impacto: ${escapeHtml(nextTask.impact)}.` : "La v1 funciona con una regla simple: capitulo activo, plan semanal y comentarios cerrados."}</p>
         <button class="ghost-button" data-action="go" data-view="${nextTask ? "planner" : "chapters"}" type="button"><span data-icon="arrow"></span>Continuar</button>
@@ -912,7 +1119,7 @@ function renderDashboard() {
 
     <section class="metrics-grid" aria-label="Indicadores principales">
       ${metric("Palabras", `${formatNumber(totalWords)}`, `${Math.round((totalWords / targetWords) * 100) || 0}% del objetivo`)}
-      ${metric("Capitulos", state.chapters.length, "estructurados en el editor")}
+      ${metric("Capítulos", state.chapters.length, "estructurados en el editor")}
       ${metric("Plan", state.tasks.filter((task) => task.status !== "later").length, "tareas activas")}
       ${metric("Comentarios", pendingComments, "pendientes de respuesta")}
       ${metric("Semana", formatNumber(wordsThisWeek), "palabras registradas")}
@@ -1015,7 +1222,7 @@ function renderChapters() {
           <button class="ghost-button" data-action="add-section" data-id="${activeChapter.id}" type="button"><span data-icon="plus"></span>Nueva seccion</button>
         </div>
 
-        <div class="chapter-tabs" role="tablist" aria-label="Capitulos">
+        <div class="chapter-tabs" role="tablist" aria-label="Capítulos">
           ${state.chapters.map((chapter) => `
             <button class="chapter-tab ${chapter.id === activeChapter.id ? "is-active" : ""}" data-action="select-chapter" data-id="${chapter.id}" type="button">
               <strong>${escapeHtml(chapter.title)}</strong>
@@ -1223,7 +1430,7 @@ function renderLiterature() {
             ${field("Ano", "year", "number", "2026")}
             <div class="inline-fields">
               ${selectField("Estado", "status", ["Pendiente", "Leyendo", "Leido", "Clave", "Descartado"])}
-              ${chapterSelect("Capitulo", "chapter")}
+              ${chapterSelect("Capítulo", "chapter")}
             </div>
             ${field("Uso en mi tesis", "use", "textarea", "Donde lo citare y para que")}
             ${field("DOI / URL", "doi", "input", "10.xxxx/...")}
@@ -1270,7 +1477,7 @@ function renderPlanner() {
         <form class="form-grid" data-form="task">
           ${field("Tarea", "title", "input", "Escribir 500 palabras del marco teorico")}
           <div class="inline-fields">
-            ${field("Area", "area", "input", "Capitulos")}
+            ${field("Area", "area", "input", "Capítulos")}
             ${selectField("Columna", "status", ["today", "week", "later"])}
           </div>
           <div class="inline-fields">
@@ -1367,7 +1574,7 @@ function renderReviews() {
             ${field("Agenda", "agenda", "textarea", "Temas a tratar")}
             ${field("Decisiones", "decisions", "textarea", "Acuerdos tomados")}
             ${field("Tareas", "tasks", "textarea", "Tareas y responsables")}
-            ${field("Proxima reunion", "next", "date", "")}
+            ${field("Próxima reunión", "next", "date", "")}
             <button class="button" type="submit"><span data-icon="plus"></span>Guardar reunion</button>
           </form>
         </div>
@@ -1376,7 +1583,7 @@ function renderReviews() {
           <h2>Nuevo comentario</h2>
           <form class="form-grid" data-form="comment">
             <div class="inline-fields">
-              ${chapterSelect("Capitulo", "chapter")}
+              ${chapterSelect("Capítulo", "chapter")}
               ${field("Fuente", "source", "input", "Director/a")}
             </div>
             ${field("Comentario recibido", "comment", "textarea", "Que hay que revisar")}
@@ -1444,15 +1651,15 @@ function renderWriting() {
         <form class="form-grid" data-form="writing">
           <div class="inline-fields">
             ${field("Fecha", "date", "date", todayISO(), true)}
-            ${chapterSelect("Capitulo", "chapter")}
+            ${chapterSelect("Capítulo", "chapter")}
           </div>
           <div class="inline-fields">
             ${field("Palabras", "words", "number", "500")}
             ${field("Minutos", "minutes", "number", "60")}
           </div>
-          ${selectField("Estado", "mood", ["Fluido", "Neutral", "Trabado", "Revision", "Lectura"])}
-          ${field("Nota", "note", "textarea", "Que avance o decision salio de esta sesion")}
-          <button class="button" type="submit"><span data-icon="plus"></span>Guardar sesion</button>
+          ${selectField("Estado", "mood", ["Fluido", "Neutral", "Trabado", "Revisión", "Lectura"])}
+          ${field("Nota", "note", "textarea", "Qué avance o decisión salió de esta sesión") }
+          <button class="button" type="submit"><span data-icon="plus"></span>Guardar sesión</button>
         </form>
       </aside>
     </section>
@@ -1461,6 +1668,11 @@ function renderWriting() {
 
 function renderAssistant() {
   const suggestions = assistantSuggestions();
+  const assistantModeText = assistantCanUseRemote()
+    ? "IA activa con acciones sobre tu tesis."
+    : demoMode
+      ? "Demo guiada activa. Las acciones se guardan dentro de esta tesis de ejemplo."
+      : "Modo local activo. Puedes trabajar con el asistente básico ahora y activar la IA más adelante cuando conectes OpenAI.";
 
   screen.innerHTML = `
     <section class="assistant-layout">
@@ -1469,7 +1681,7 @@ function renderAssistant() {
           <div>
             <p class="eyebrow">Asistente interno</p>
             <h2>Preguntas, consejo y acciones directas</h2>
-            <p>Puedes pedirme resumen, prioridades o escribir cosas como "Agendar reunion el viernes a las 16:00 con directora sobre metodologia".</p>
+            <p>Puedes pedirme resumen, prioridades o escribir cosas como "Agendar reunión el viernes a las 16:00 con directora sobre metodología".</p>
           </div>
           <button class="ghost-button" data-action="assistant-clear" type="button"><span data-icon="trash"></span>Reiniciar chat</button>
         </div>
@@ -1479,7 +1691,7 @@ function renderAssistant() {
         </div>
 
         <form class="assistant-composer" data-form="assistant">
-          ${field("Escribe tu mensaje", "message", "textarea", "Ejemplo: Crear tarea enviar borrador del capitulo 2 para manana")}
+          ${field("Escribe tu mensaje", "message", "textarea", "Ejemplo: Crear tarea enviar borrador del capítulo 2 para mañana") }
           <div class="summary-actions">
             <button class="button" type="submit" ${assistantBusy ? 'disabled' : ''}><span data-icon="plus"></span>${assistantBusy ? 'Pensando...' : 'Enviar'}</button>
           </div>
@@ -1488,8 +1700,8 @@ function renderAssistant() {
 
       <aside class="assistant-sidebar">
         <div class="form-panel">
-          <h2>Pruebas utiles</h2>
-          <p class="muted">${assistantCanUseRemote() ? 'IA activa con acciones sobre tu tesis.' : 'Modo local activo. Inicia sesion y anade OPENAI_API_KEY para usar IA real.'}</p>
+          <h2>Pruebas útiles</h2>
+          <p class="muted">${assistantModeText}</p>
           <div class="assistant-suggestion-grid">
             ${suggestions.map((item) => `<button class="ghost-button assistant-suggestion" data-action="assistant-suggest" data-message="${escapeAttribute(item)}" type="button">${escapeHtml(item)}</button>`).join("")}
           </div>
@@ -1497,14 +1709,14 @@ function renderAssistant() {
 
         <article class="card">
           <p class="card-kicker">Puede hacer ahora</p>
-          <h2>Lo mas util en esta v1</h2>
+          <h2>Lo más útil en esta v1</h2>
           <ul class="quality-list compact-list">
             <li>Resumir progreso y detectar cuellos de botella</li>
-            <li>Priorizar la semana segun tareas, comentarios y fechas</li>
+            <li>Priorizar la semana según tareas, comentarios y fechas</li>
             <li>Crear tareas desde lenguaje natural</li>
             <li>Agendar reuniones con fecha y hora</li>
-            <li>Registrar notas y comentarios de revision</li>
-            <li>Dar consejo practico sobre un capitulo concreto</li>
+            <li>Registrar notas y comentarios de revisión</li>
+            <li>Dar consejo práctico sobre un capítulo concreto</li>
           </ul>
         </article>
       </aside>
@@ -1524,12 +1736,21 @@ function renderAssistantMessage(message) {
 }
 
 function createInitialAssistantThread() {
-  return [
-    createAssistantEntry(
-      "assistant",
-      "Soy el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.\n\nPrueba algo como:\n- Que deberia priorizar esta semana\n- Crear tarea cerrar comentarios del capitulo 2 para manana\n- Agendar reunion el viernes a las 16:00 con directora sobre metodologia"
-    )
-  ];
+  const intro = demoMode
+    ? `Esta es una demo guiada de DoctoralOS. Puedes recorrer una tesis de ejemplo, pedir un resumen del estado y crear acciones dentro de la demo.
+
+Prueba algo como:
+- Resúmeme el progreso actual
+- Qué debería priorizar esta semana
+- Agendar reunión el viernes a las 16:00 con directora sobre metodología`
+    : `Soy el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.
+
+Prueba algo como:
+- Qué debería priorizar esta semana
+- Crear tarea cerrar comentarios del capítulo 2 para mañana
+- Agendar reunión el viernes a las 16:00 con directora sobre metodología`;
+
+  return [createAssistantEntry("assistant", intro)];
 }
 
 function createAssistantEntry(role, text) {
@@ -1543,19 +1764,19 @@ function createAssistantEntry(role, text) {
 
 function assistantSuggestions() {
   return [
-    "Que deberia priorizar esta semana",
-    "Resumeme el progreso actual",
-    "Agendar reunion el viernes a las 16:00 con directora sobre metodologia",
-    "Crear tarea cerrar comentarios del capitulo 2 para manana",
-    "Anade nota al capitulo 1: abrir la introduccion con el problema de investigacion",
-    "Registrar comentario del director en capitulo 2: falta justificar la muestra para el viernes"
+    "Qué debería priorizar esta semana",
+    "Resúmeme el progreso actual",
+    "Agendar reunión el viernes a las 16:00 con directora sobre metodología",
+    "Crear tarea cerrar comentarios del capítulo 2 para mañana",
+    "Añade nota al capítulo 1: abrir la introducción con el problema de investigación",
+    "Registrar comentario del director en capítulo 2: falta justificar la muestra para el viernes"
   ];
 }
 
 async function submitAssistantPrompt(message) {
   const text = String(message || "").trim();
   if (!text) {
-    showToast("Escribe una pregunta o una accion");
+    showToast("Escribe una pregunta o una acción");
     return;
   }
   if (assistantBusy) {
@@ -1619,7 +1840,7 @@ function buildAssistantReply(message) {
   const normalized = normalizeUserText(message);
 
   if (/^(hola|buenas|hey|hi)\b/.test(normalized)) {
-    return { reply: "Hola. Estoy dentro de tu espacio de tesis y puedo ayudarte con prioridades, capitulos, tareas y reuniones. Si quieres, empieza por preguntarme que deberias hacer esta semana." };
+    return { reply: "Hola. Estoy dentro de tu espacio de tesis y puedo ayudarte con prioridades, capítulos, tareas y reuniones. Si quieres, empieza por preguntarme qué deberías hacer esta semana." };
   }
 
   if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
@@ -1634,12 +1855,12 @@ function buildAssistantReply(message) {
   if (chapter) return { reply: buildChapterAdvice(chapter) };
 
   return {
-    reply: "Puedo ayudarte con cuatro cosas muy utiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resumeme el progreso actual\n- Que deberia priorizar esta semana\n- Crear tarea enviar borrador del capitulo 2 para manana\n- Agendar reunion el martes a las 16:00 con directora sobre metodologia"
+    reply: "Puedo ayudarte con cuatro cosas muy utiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Crear tarea enviar borrador del capitulo 2 para manana\n- Agendar reunion el martes a las 16:00 con directora sobre metodologia"
   };
 }
 
 function isSummaryRequest(normalized) {
-  return normalized.includes("resumen") || normalized.includes("resumeme") || normalized.includes("resume") || normalized.includes("progreso") || normalized.includes("estado general");
+  return normalized.includes("resumen") || normalized.includes("resumeme") || normalized.includes("resúmeme") || normalized.includes("resume") || normalized.includes("progreso") || normalized.includes("estado general");
 }
 
 function isWeeklyPriorityRequest(normalized) {
@@ -1984,7 +2205,7 @@ function extractEffort(text) {
 
 function inferTaskArea(text) {
   const normalized = normalizeUserText(text);
-  if (normalized.includes("capitulo") || normalized.includes("borrador") || normalized.includes("escribir")) return "Capitulos";
+  if (normalized.includes("capitulo") || normalized.includes("borrador") || normalized.includes("escribir")) return "Capítulos";
   if (normalized.includes("comentario") || normalized.includes("revision")) return "Revision";
   if (normalized.includes("lectura") || normalized.includes("fuente")) return "Lecturas";
   if (normalized.includes("reunion")) return "Reuniones";

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Seguridad - DoctoralOS</title>
+    <meta name="description" content="Estado actual de seguridad y limitaciones conocidas en DoctoralOS v1.">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="marketing-page">
+    <header class="marketing-nav">
+      <a class="brand marketing-brand" href="/">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16 8.5C13.9 7.1 11.5 6.4 8.8 6.4H6.5V24.7H8.8C11.5 24.7 13.9 25.4 16 26.8C18.1 25.4 20.5 24.7 23.2 24.7H25.5V6.4H23.2C20.5 6.4 18.1 7.1 16 8.5Z" fill="#F8FBFC"/><path d="M16 8.5V26.8" stroke="#C79A3B" stroke-width="1.6" stroke-linecap="round"/><path d="M10 12.1H13.3M10 15.3H13.3M18.7 12.1H22M18.7 15.3H22" stroke="#7C8992" stroke-width="1.4" stroke-linecap="round"/><path d="M8.8 6.4H6.5V24.7H8.8C11.5 24.7 13.9 25.4 16 26.8C18.1 25.4 20.5 24.7 23.2 24.7H25.5V6.4H23.2C20.5 6.4 18.1 7.1 16 8.5C13.9 7.1 11.5 6.4 8.8 6.4Z" stroke="#E4EAED" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+        <span><strong>DoctoralOS</strong><small>Seguridad</small></span>
+      </a>
+      <nav>
+        <a href="/">Inicio</a>
+        <a href="/pricing.html">Precios</a>
+        <a href="/help.html">Cómo funciona</a>
+        <a class="ghost-button" href="/app?auth=login">Iniciar sesión</a>
+        <a class="button" href="/app?auth=register">Crear cuenta</a>
+      </nav>
+    </header>
+
+    <main class="marketing-simple simple-stack">
+      <section>
+        <p class="eyebrow">Seguridad</p>
+        <h1>Qué medidas hay hoy y qué queda pendiente antes de una producción más madura</h1>
+        <p class="muted">La v1 ya tiene una base seria para cuentas y separación por usuario, pero todavía no pretende venderse como infraestructura enterprise.</p>
+      </section>
+
+      <section class="pricing-detail-grid">
+        <article class="list-card">
+          <h3>Estado actual</h3>
+          <ul class="quality-list compact-list">
+            <li>Backend con Node.js</li>
+            <li>Base de datos SQLite con persistencia</li>
+            <li>Contraseñas protegidas con PBKDF2 y sal individual</li>
+            <li>Sesiones con token aleatorio</li>
+            <li>Separación de estado por usuario</li>
+            <li>Exportación de respaldo por usuario autenticado</li>
+          </ul>
+        </article>
+        <article class="list-card">
+          <h3>Limitaciones conocidas</h3>
+          <ul class="quality-list compact-list">
+            <li>No hay recuperación de cuenta por email real</li>
+            <li>No hay 2FA</li>
+            <li>No hay rate limiting</li>
+            <li>No hay cifrado de contenido a nivel de campo</li>
+            <li>No hay backups remotos automatizados</li>
+          </ul>
+        </article>
+        <article class="list-card">
+          <h3>Antes de una producción más exigente</h3>
+          <ul class="quality-list compact-list">
+            <li>HTTPS obligatorio en todos los entornos públicos</li>
+            <li>Rate limiting y controles básicos anti abuso</li>
+            <li>Recuperación de contraseña</li>
+            <li>Política de backups clara</li>
+            <li>Revisión legal según jurisdicción</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="marketing-cta-band marketing-cta-band-inline">
+        <div>
+          <p class="eyebrow">Transparencia</p>
+          <h2>Preferimos explicar el estado real del producto</h2>
+          <p>La confianza no sale de prometer demasiado, sino de dejar claro qué está resuelto y qué todavía estamos mejorando.</p>
+        </div>
+        <div class="summary-actions">
+          <a class="button" href="mailto:mario.martinez.cgr@gmail.com">Preguntar</a>
+          <a class="ghost-button" href="/privacy.html">Ver privacidad</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="marketing-footer">
+      <a href="/">Inicio</a>
+      <a href="/privacy.html">Privacidad</a>
+      <a href="/terms.html">Términos</a>
+      <a href="/help.html">Cómo funciona</a>
+      <a href="mailto:mario.martinez.cgr@gmail.com">Contacto</a>
+    </footer>
+  </body>
+</html>
+

@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DoctoralOS - App v1</title>
+    <title>DoctoralOS - Sistema doctoral</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Navegacion principal">
+      <aside class="sidebar" aria-label="Navegación principal">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16 8.5C13.9 7.1 11.5 6.4 8.8 6.4H6.5V24.7H8.8C11.5 24.7 13.9 25.4 16 26.8C18.1 25.4 20.5 24.7 23.2 24.7H25.5V6.4H23.2C20.5 6.4 18.1 7.1 16 8.5Z" fill="#F8FBFC"/><path d="M16 8.5V26.8" stroke="#C79A3B" stroke-width="1.6" stroke-linecap="round"/><path d="M10 12.1H13.3M10 15.3H13.3M18.7 12.1H22M18.7 15.3H22" stroke="#7C8992" stroke-width="1.4" stroke-linecap="round"/><path d="M8.8 6.4H6.5V24.7H8.8C11.5 24.7 13.9 25.4 16 26.8C18.1 25.4 20.5 24.7 23.2 24.7H25.5V6.4H23.2C20.5 6.4 18.1 7.1 16 8.5C13.9 7.1 11.5 6.4 8.8 6.4Z" stroke="#E4EAED" stroke-width="1.4" stroke-linejoin="round"/></svg></div>
           <div>
@@ -24,7 +24,7 @@
           </button>
           <button class="nav-item" data-view="chapters" type="button">
             <span class="nav-icon" data-icon="chapters"></span>
-            <span>Capitulos</span>
+            <span>Capítulos</span>
           </button>
           <button class="nav-item" data-view="literature" type="button">
             <span class="nav-icon" data-icon="book"></span>
@@ -36,7 +36,7 @@
           </button>
           <button class="nav-item" data-view="reviews" type="button">
             <span class="nav-icon" data-icon="review"></span>
-            <span>Reuniones y revision</span>
+            <span>Reuniones y revisión</span>
           </button>
           <button class="nav-item" data-view="writing" type="button">
             <span class="nav-icon" data-icon="writing"></span>
@@ -54,7 +54,7 @@
             <strong id="sidebarProgress">0%</strong>
           </div>
           <div class="mini-stat">
-            <span>Proxima entrega</span>
+            <span>Próxima entrega</span>
             <strong id="sidebarDue">-</strong>
           </div>
         </div>
@@ -72,7 +72,7 @@
               <span data-icon="check"></span>
               <span id="authLabel">Cuenta</span>
             </button>
-            <button class="icon-button" id="logoutButton" data-action="logout" type="button" aria-label="Cerrar sesion" hidden>
+            <button class="icon-button" id="logoutButton" data-action="logout" type="button" aria-label="Cerrar sesión" hidden>
               <span data-icon="arrow"></span>
             </button>
             <button class="icon-button" data-action="print" type="button" aria-label="Imprimir vista">
@@ -98,9 +98,9 @@
       <div class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <div class="section-header">
           <div>
-            <p class="eyebrow">Cuenta y sincronizacion</p>
+            <p class="eyebrow">Cuenta y sincronización</p>
             <h2 id="authTitle">Entrar en DoctoralOS</h2>
-            <p>Con una cuenta, la tesis se guarda en el backend local y puede sincronizarse entre navegadores o dispositivos que accedan a este servidor.</p>
+            <p>Con una cuenta, la tesis se guarda en el backend y puede sincronizarse entre navegadores o dispositivos que accedan a este servidor.</p>
           </div>
           <button class="icon-button" data-action="auth-close" type="button" aria-label="Cerrar">
             <span data-icon="check"></span>
@@ -109,13 +109,13 @@
 
         <div class="auth-grid">
           <form class="form-panel form-grid" data-auth-form="login">
-            <h3>Iniciar sesion</h3>
+            <h3>Iniciar sesión</h3>
             <div class="field">
               <label for="loginEmail">Email</label>
               <input id="loginEmail" name="email" type="email" autocomplete="email" required>
             </div>
             <div class="field">
-              <label for="loginPassword">Contrasena</label>
+              <label for="loginPassword">Contraseña</label>
               <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
             </div>
             <button class="button" type="submit">Entrar y sincronizar</button>
@@ -132,7 +132,7 @@
               <input id="registerEmail" name="email" type="email" autocomplete="email" required>
             </div>
             <div class="field">
-              <label for="registerPassword">Contrasena</label>
+              <label for="registerPassword">Contraseña</label>
               <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
             </div>
             <button class="button" type="submit">Crear y sincronizar</button>
@@ -144,3 +144,4 @@
     <script src="app.js"></script>
   </body>
 </html>
+

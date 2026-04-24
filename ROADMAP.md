@@ -3,26 +3,27 @@
 ## V1
 
 - Producto para doctorandos individuales.
-- Capitulos, plan semanal, reuniones/revision, escritura, lecturas basicas.
-- Cuenta, sincronizacion y respaldo.
-- Landing, precios, ayuda y documentos de confianza.
+- Capítulos, plan semanal, reuniones y revisión, escritura, lecturas básicas.
+- Cuenta, sincronización y respaldo.
+- Landing, precios, demo guiada, ayuda y documentos de confianza.
 
 ## V1.1
 
-- Exportacion Markdown/Word.
-- Mejor onboarding.
-- Plantillas de tesis por disciplina.
-- Mejoras de accesibilidad y responsive.
+- Mejor onboarding dentro de la app.
+- Recuperación de cuenta por email.
+- Mejoras de responsive y accesibilidad.
+- Refinar el asistente para más acciones sobre la tesis.
 
 ## V1.2
 
-- Integracion Zotero.
-- Comentarios compartidos con director/a.
-- Recuperacion de cuenta por email.
+- Exportación Markdown o Word.
+- Plantillas de tesis por disciplina.
+- Compartir comentarios o revisión con director o codirector.
 
-## Despues
+## Después
 
-- IA doctoral con trazabilidad.
-- Corpus avanzado.
-- Defensa.
+- Integración Zotero.
+- IA doctoral con trazabilidad y mejor contexto.
 - Planes de grupo e institucionales.
+- Funciones específicas para defensa.
+
