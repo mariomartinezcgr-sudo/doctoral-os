@@ -51,6 +51,7 @@ const defaultState = {
   editorChapterId: "",
   literatureFilter: "",
   literatureCitationId: "",
+  literatureCitationStyle: "APA 7",
   project: {
     name: "Mi tesis doctoral",
     candidate: "Doctorando/a",
@@ -165,6 +166,7 @@ function ensureStateShape(target) {
   target.forumTopics = Array.isArray(target.forumTopics) ? target.forumTopics : [];
   target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
   target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
+  target.literatureCitationStyle = ["APA 7", "MLA 9", "Chicago", "BibTeX"].includes(target.literatureCitationStyle) ? target.literatureCitationStyle : "APA 7";
   target.meetings.forEach((meeting) => {
     meeting.time = meeting.time || "";
     if (meeting.type === "Direccion") meeting.type = "Dirección";
@@ -241,6 +243,7 @@ function createFreshState(user = {}) {
     editorChapterId: "",
     literatureFilter: "",
     literatureCitationId: "",
+    literatureCitationStyle: "APA 7",
     project: {
       name: "Mi tesis doctoral",
       candidate: name,
@@ -1013,7 +1016,7 @@ function handleScreenClick(event) {
 
   if (action === "copy-citation") {
     const reading = state.readings.find((item) => item.id === id);
-    if (reading) copyTextToClipboard(buildBibliographicReference(reading));
+    if (reading) copyTextToClipboard(buildBibliographicReference(reading, state.literatureCitationStyle));
   }
 
   if (action === "task-status") {
@@ -1284,6 +1287,11 @@ function handleScreenInput(event) {
     }
   }
 
+  if (event.target.matches("[data-citation-style]")) {
+    state.literatureCitationStyle = event.target.value;
+    saveState("", { skipSync: true });
+    renderLiterature();
+  }
 }
 
 function render() {
@@ -1763,14 +1771,10 @@ function newChapterPanel() {
 }
 
 function formatReferenceAuthors(value) {
-  const raw = String(value || "")
+  return String(value || "")
     .split(/;| y | and /i)
     .map((item) => item.trim())
     .filter(Boolean);
-  if (!raw.length) return "Autor pendiente";
-  if (raw.length === 1) return raw[0];
-  if (raw.length === 2) return `${raw[0]} & ${raw[1]}`;
-  return `${raw.slice(0, -1).join(", ")} & ${raw[raw.length - 1]}`;
 }
 
 function ensureReferencePeriod(value) {
@@ -1788,14 +1792,110 @@ function normalizeReferenceLocator(value) {
   return text;
 }
 
-function buildBibliographicReference(reading) {
+function formatAuthorsForApa(authors) {
+  if (!authors.length) return "Autor pendiente";
+  const formatted = authors.map((author) => {
+    const parts = author.split(',').map((item) => item.trim()).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0]}, ${parts.slice(1).join(', ')}`;
+    return author;
+  });
+  if (formatted.length === 1) return formatted[0];
+  if (formatted.length === 2) return `${formatted[0]} & ${formatted[1]}`;
+  return `${formatted.slice(0, -1).join(', ')}, & ${formatted[formatted.length - 1]}`;
+}
+
+function formatAuthorsForMla(authors) {
+  if (!authors.length) return "Autor pendiente";
+  if (authors.length === 1) return authors[0];
+  return `${authors[0]}, et al.`;
+}
+
+function formatAuthorsForChicago(authors) {
+  if (!authors.length) return "Autor pendiente";
+  if (authors.length === 1) return authors[0];
+  if (authors.length === 2) return `${authors[0]} y ${authors[1]}`;
+  return `${authors[0]} et al.`;
+}
+
+function bibliographyEntryType(reading) {
+  const normalized = normalizeUserText(reading?.type || "");
+  if (normalized.includes("libro")) return "book";
+  if (normalized.includes("capitulo")) return "incollection";
+  if (normalized.includes("informe")) return "techreport";
+  return "article";
+}
+
+function bibliographyKey(reading, authors, year) {
+  const authorSeed = normalizeUserText(authors[0] || "autor")
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("") || "autor";
+  const titleSeed = normalizeUserText(reading?.title || "tesis")
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("") || "tesis";
+  return `${authorSeed}${year || "sf"}${titleSeed}`;
+}
+
+function buildApaReference(reading) {
   const authors = formatReferenceAuthors(reading?.authors);
   const year = String(reading?.year || "").trim() || "s. f.";
   const title = ensureReferencePeriod(reading?.title || "Título pendiente");
-  const sourceBase = String(reading?.source || reading?.type || "").trim();
-  const source = sourceBase ? ensureReferencePeriod(sourceBase) : "";
+  const source = ensureReferencePeriod(reading?.source || reading?.type || "");
   const locator = normalizeReferenceLocator(reading?.doi);
-  return [authors, `(${year}).`, title, source, locator].filter(Boolean).join(" ");
+  return [formatAuthorsForApa(authors), `(${year}).`, title, source, locator].filter(Boolean).join(" ");
+}
+
+function buildMlaReference(reading) {
+  const authors = formatReferenceAuthors(reading?.authors);
+  const year = String(reading?.year || "").trim() || "s. f.";
+  const title = String(reading?.title || "Título pendiente").trim();
+  const source = String(reading?.source || reading?.type || "Fuente pendiente").trim();
+  const locator = normalizeReferenceLocator(reading?.doi);
+  return [ensureReferencePeriod(formatAuthorsForMla(authors)), `"${title}."`, source, year, locator].filter(Boolean).join(", ").replace(/, ([^,]*)$/, '. $1');
+}
+
+function buildChicagoReference(reading) {
+  const authors = formatReferenceAuthors(reading?.authors);
+  const year = String(reading?.year || "").trim() || "s. f.";
+  const title = String(reading?.title || "Título pendiente").trim();
+  const source = ensureReferencePeriod(reading?.source || reading?.type || "");
+  const locator = normalizeReferenceLocator(reading?.doi);
+  return [ensureReferencePeriod(formatAuthorsForChicago(authors)), `${year}.`, `"${title}."`, source, locator].filter(Boolean).join(" ");
+}
+
+function buildBibtexReference(reading) {
+  const authors = formatReferenceAuthors(reading?.authors);
+  const year = String(reading?.year || "").trim() || "0000";
+  const type = bibliographyEntryType(reading);
+  const key = bibliographyKey(reading, authors, year === "s. f." ? "sf" : year);
+  const lines = [
+    `@${type}{${key},`,
+    `  author = {${authors.join(' and ') || 'Autor pendiente'}},`,
+    `  title = {${String(reading?.title || 'Título pendiente').trim()}},`,
+    `  year = {${year}},`
+  ];
+  if (reading?.source) {
+    const sourceField = type === 'book' ? 'publisher' : type === 'techreport' ? 'institution' : type === 'incollection' ? 'booktitle' : 'journal';
+    lines.push(`  ${sourceField} = {${String(reading.source).trim()}},`);
+  }
+  if (reading?.doi) {
+    lines.push(`  doi = {${String(reading.doi).replace(/^https?:\/\/doi\.org\//i, '').trim()}},`);
+  }
+  lines.push('}');
+  return lines.join('\n');
+}
+
+function buildBibliographicReference(reading, style = state.literatureCitationStyle || "APA 7") {
+  if (!reading) return "";
+  if (style === "MLA 9") return buildMlaReference(reading);
+  if (style === "Chicago") return buildChicagoReference(reading);
+  if (style === "BibTeX") return buildBibtexReference(reading);
+  return buildApaReference(reading);
 }
 
 async function copyTextToClipboard(text) {
@@ -1831,7 +1931,8 @@ function renderLiterature() {
     return !term || haystack.includes(term);
   });
   const selectedReading = state.readings.find((reading) => reading.id === state.literatureCitationId) || filtered[0] || state.readings[0] || null;
-  const citation = selectedReading ? buildBibliographicReference(selectedReading) : "";
+  const style = state.literatureCitationStyle || "APA 7";
+  const citation = selectedReading ? buildBibliographicReference(selectedReading, style) : "";
 
   screen.innerHTML = `
     <section class="literature-layout">
@@ -1840,7 +1941,7 @@ function renderLiterature() {
           <div>
             <p class="eyebrow">Lecturas mínimas</p>
             <h2>Fuentes vinculadas a capítulos</h2>
-            <p>En la v1, las lecturas sirven para sostener capítulos concretos, tener claro para qué se usan y sacar una referencia rápida lista para copiar.</p>
+            <p>En la v1, las lecturas sirven para sostener capítulos concretos, tener claro para qué se usan y sacar una referencia rápida en distintos estilos sin salir del flujo de tesis.</p>
           </div>
         </div>
 
@@ -1897,7 +1998,7 @@ function renderLiterature() {
           </form>
         </div>
 
-        <article class="card citation-card">
+        <article class="card citation-card citation-card--premium">
           <div class="section-header compact-head">
             <div>
               <p class="card-kicker">Referencia rápida</p>
@@ -1905,14 +2006,24 @@ function renderLiterature() {
             </div>
             ${selectedReading ? `<button class="tiny-button" data-action="copy-citation" data-id="${selectedReading.id}" type="button"><span data-icon="copy"></span>Copiar</button>` : ""}
           </div>
-          <p class="muted">Formato académico base listo para copiar y pegar en tus notas o bibliografía provisional.</p>
-          <div class="generated-box citation-preview">${selectedReading ? escapeHtml(citation) : "Selecciona una lectura de la tabla o crea una nueva para generar aquí una referencia rápida."}</div>
+          <p class="muted">Elige el estilo y copia una versión provisional directamente desde la lectura seleccionada.</p>
+          <div class="citation-toolbar">
+            <label class="field citation-style-field">
+              <span>Estilo</span>
+              <select data-citation-style>
+                ${["APA 7", "MLA 9", "Chicago", "BibTeX"].map((option) => `<option value="${escapeAttribute(option)}" ${option === style ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+              </select>
+            </label>
+            <div class="citation-style-chip">${escapeHtml(style)}</div>
+          </div>
+          <div class="generated-box citation-preview ${style === "BibTeX" ? "citation-preview--code" : ""}">${selectedReading ? escapeHtml(citation) : "Selecciona una lectura de la tabla o crea una nueva para generar aquí una referencia rápida."}</div>
         </article>
       </aside>
     </section>
   `;
   hydrateIcons(screen);
 }
+
 function renderPlanner() {
   const columns = [
     { id: "today", title: "Hoy" },
