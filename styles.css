@@ -1996,6 +1996,25 @@ tr:last-child td {
   color: var(--muted);
 }
 
+.auth-helper-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.auth-helper-links a {
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.auth-helper-links a:hover,
+.auth-helper-links a:focus-visible {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
 @media (max-width: 1180px) {
   .help-flow-grid,
   .pricing-question-grid {
@@ -2045,6 +2064,29 @@ tr:last-child td {
 .locked-card {
   border-color: #d7e0e5;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+  box-shadow: 0 20px 38px rgba(22, 35, 40, 0.08);
+}
+
+.gate-trust-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.gate-trust-list article {
+  padding: 14px;
+  border: 1px solid #dde5e9;
+  border-radius: var(--radius);
+  background: rgba(248, 251, 252, 0.92);
+}
+
+.gate-trust-list strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.gate-trust-list span {
+  color: var(--muted);
 }
 
 .auth-gate-card ul {
@@ -2088,6 +2130,20 @@ tr:last-child td {
 .demo-tour-card:focus-visible {
   border-color: #bfd5d1;
   background: #fbfdfd;
+  transform: translateY(-1px);
+}
+
+.access-band article {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+}
+
+.access-flow-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+  border-color: #d6e0e5;
+}
+
+.marketing-mini-links {
+  margin-top: 18px;
 }
 
 .demo-journey-strip article {

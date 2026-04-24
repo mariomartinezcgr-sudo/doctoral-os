@@ -1179,13 +1179,13 @@ function renderAuthGate() {
       <div class="panel project-summary auth-gate-panel">
         <div>
           <div class="badge-row auth-gate-badges">
-            <span class="badge gold">Workspace locked</span>
+            <span class="badge gold">Acceso protegido</span>
             <span class="badge violet">Beta cerrada</span>
             <span class="badge teal">Sincronización privada</span>
           </div>
           <p class="eyebrow">Acceso privado</p>
-          <h2>Tu espacio doctoral vive detrás de una cuenta, no en abierto</h2>
-          <p>DoctoralOS protege capítulos, tareas, reuniones, comentarios y notas dentro de un workspace privado. Puedes entrar si ya formas parte de la beta, acceder con invitación o explorar la demo guiada para entender el producto antes de solicitar acceso.</p>
+          <h2>DoctoralOS abre solo cuando la tesis entra en un espacio real de trabajo</h2>
+          <p>La app pública te deja entender el producto y la demo te enseña el flujo completo. El workspace real, en cambio, se mantiene detrás de una cuenta privada para trabajar con capítulos, reuniones, comentarios y escritura sin dejar la tesis en abierto.</p>
           <div class="summary-actions auth-gate-actions">
             <button class="button" data-action="auth-launch" data-intent="login" type="button"><span data-icon="assistant"></span>Iniciar sesión</button>
             <button class="ghost-button" data-action="auth-launch" data-intent="register" type="button"><span data-icon="plus"></span>Entrar con invitación</button>
@@ -1201,20 +1201,34 @@ function renderAuthGate() {
             </a>
             <a class="auth-link-card" href="mailto:mario.martinez.cgr@gmail.com?subject=Solicitud%20de%20acceso%20a%20DoctoralOS">
               <strong>Solicitar acceso beta</strong>
-              <span>Escríbenos si quieres probar la app con tu tesis real o darnos feedback.</span>
+              <span>Pide invitación si quieres probar la app con tu tesis real o darnos feedback.</span>
             </a>
           </div>
         </div>
         <article class="card auth-gate-card locked-card">
-          <p class="card-kicker">Workspace locked</p>
+          <p class="card-kicker">Beta cerrada</p>
           <h2>Qué desbloqueas al entrar</h2>
           <ul class="quality-list compact-list">
             <li>Capítulos con editor, checklist y notas</li>
-            <li>Plan semanal y revisión en un solo sitio</li>
-            <li>Sesiones de escritura y respaldo exportable</li>
-            <li>Asistente y foro listos para crecer contigo</li>
+            <li>Plan semanal, reuniones y comentarios en el mismo sitio</li>
+            <li>Escritura registrada, respaldo exportable y cuenta privada</li>
+            <li>Asistente y foro preparados para crecer con la v1</li>
           </ul>
-          <p class="muted auth-gate-note">Pensado para una beta cerrada: menos ruido, mejor feedback y datos de tesis en un espacio personal.</p>
+          <div class="gate-trust-list">
+            <article>
+              <strong>Acceso controlado</strong>
+              <span>La beta se abre por invitación o validación previa, no por registro libre.</span>
+            </article>
+            <article>
+              <strong>Workspace personal</strong>
+              <span>Tu trabajo vive en un entorno privado con sincronización y sesiones seguras.</span>
+            </article>
+            <article>
+              <strong>Demo separada</strong>
+              <span>Puedes enseñar el producto o entenderlo sin tocar datos reales.</span>
+            </article>
+          </div>
+          <p class="muted auth-gate-note">Pensado para una beta cerrada: menos ruido, mejor feedback y una experiencia más seria desde el primer acceso.</p>
         </article>
       </div>
     </section>
@@ -1234,11 +1248,12 @@ function renderDashboard() {
       <div>
         <div class="badge-row auth-gate-badges">
           <span class="badge gold">Demo guiada</span>
+          <span class="badge teal">Sin registro</span>
           <span class="badge violet">Recorrido de 3 minutos</span>
         </div>
         <p class="card-kicker">Tesis de ejemplo</p>
-        <h2>Recorre el producto como lo haría un doctorando real</h2>
-        <p>Empieza por el panel para ver foco y próxima entrega, abre el capítulo metodológico para entender el editor y termina en revisión o asistente para ver cómo se cierran decisiones.</p>
+        <h2>Entiende el valor del producto antes de pedir acceso</h2>
+        <p>Empieza por el panel para ver foco y próxima entrega, abre el capítulo metodológico para entender el editor y termina en revisión o asistente para ver cómo se convierten reuniones y comentarios en trabajo cerrable.</p>
         <div class="demo-tour-grid">
           <button class="demo-tour-card" data-action="go" data-view="dashboard" type="button">
             <strong>1. Entiende el panel</strong>
