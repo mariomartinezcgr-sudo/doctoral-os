@@ -23,6 +23,8 @@ En Railway no hace falta definir `HOST` manualmente: el servidor escucha por def
 
 Para activar el asistente con IA real, define `OPENAI_API_KEY`. Opcionalmente puedes fijar `OPENAI_MODEL` y por defecto usa `gpt-5.4-mini`.
 
+La beta cerrada queda lista para producción: con `NODE_ENV=production` el registro nuevo se puede limitar. Puedes permitir acceso con `BETA_INVITE_CODE` o con una lista de correos en `BETA_ALLOWED_EMAILS` separados por comas.
+
 ## Modulos incluidos
 
 - Panel general orientado a tres acciones: escribir capitulo, planificar semana y resolver comentarios.

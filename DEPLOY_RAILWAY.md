@@ -18,11 +18,12 @@ El proyecto ya incluye:
 3. Elige Deploy from GitHub Repo.
 4. Selecciona el repositorio de DoctoralOS.
 5. En variables, anade NODE_ENV=production.
-6. Para activar IA real en el asistente, anade OPENAI_API_KEY.
-7. Opcional: fija OPENAI_MODEL=gpt-5.4-mini o el modelo que prefieras.
-8. Crea un volumen persistente para el servicio.
-9. Monta el volumen en /app/data.
-10. Espera al despliegue y abre la URL publica.
+6. La beta cerrada se activa en producción. Para dejar entrar a testers, usa BETA_INVITE_CODE o BETA_ALLOWED_EMAILS con correos separados por comas.
+7. Para activar IA real en el asistente, anade OPENAI_API_KEY.
+8. Opcional: fija OPENAI_MODEL=gpt-5.4-mini o el modelo que prefieras.
+9. Crea un volumen persistente para el servicio.
+10. Monta el volumen en /app/data.
+11. Espera al despliegue y abre la URL publica.
 
 ## Comprobacion
 

@@ -18,6 +18,9 @@ const SESSION_COOKIE = "doctoral_os_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const rateLimitStore = new Map();
+const CLOSED_BETA = /^(1|true|yes)$/i.test(String(process.env.CLOSED_BETA || (process.env.NODE_ENV === "production" ? "1" : "0")));
+const BETA_INVITE_CODE = String(process.env.BETA_INVITE_CODE || "").trim();
+const BETA_ALLOWED_EMAILS = new Set(String(process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => normalizeEmail(email)).filter(Boolean));
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -129,6 +132,7 @@ async function handleApi(req, res) {
     const body = await readJson(req);
     const email = normalizeEmail(body.email);
     const password = String(body.password || "");
+    const inviteCode = String(body.inviteCode || "").trim();
     const name = String(body.name || "").trim() || email.split("@")[0];
 
     if (!isValidEmail(email) || password.length < 8) {
@@ -138,6 +142,12 @@ async function handleApi(req, res) {
 
     if (findUserByEmail(email)) {
       sendJson(res, 409, { error: "Ya existe una cuenta con ese email." });
+      return;
+    }
+
+    const betaAccess = betaAccessStatus(email, inviteCode);
+    if (!betaAccess.allowed) {
+      sendJson(res, 403, { error: betaAccess.message, code: "beta_closed" });
       return;
     }
 
@@ -603,6 +613,30 @@ function normalizeEmail(value) {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function betaAccessStatus(email, inviteCode) {
+  const betaEnabled = CLOSED_BETA || Boolean(BETA_INVITE_CODE) || BETA_ALLOWED_EMAILS.size > 0;
+  if (!betaEnabled) return { allowed: true };
+  if (BETA_ALLOWED_EMAILS.has(email)) return { allowed: true };
+  if (BETA_INVITE_CODE && inviteCode && safeSecretEqual(inviteCode, BETA_INVITE_CODE)) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    message: BETA_INVITE_CODE
+      ? "El acceso a esta beta está cerrado. Usa un correo invitado o un código de invitación válido."
+      : "El acceso a esta beta está cerrado. Escríbenos para solicitar acceso."
+  };
+}
+
+function safeSecretEqual(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  if (aBuffer.length !== bBuffer.length) return false;
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
 }
 
 function sanitizeState(state) {

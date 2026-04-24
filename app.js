@@ -376,7 +376,7 @@ function createDemoState() {
       { id: createId("wr"), date: demoDateOffset(-6), chapter: chapter2.title, words: 680, minutes: 80, mood: "Trabado", note: "Sesión lenta por duplicación entre apartados; queda tarea clara para la semana." }
     ],
     assistantThread: [
-      { id: createId("msg"), role: "assistant", text: "Esta es una demo guiada de DoctoralOS. Puedes recorrer una tesis de ejemplo, pedir un resumen del estado y crear acciones dentro de la demo.", createdAt: demoTimestamp(-1, 9, 6) },
+      { id: createId("msg"), role: "assistant", text: "Estás en la demo guiada de DoctoralOS. En dos o tres minutos puedes ver el panel, abrir el capítulo metodológico, revisar comentarios y pedirme acciones dentro de esta tesis de ejemplo.", createdAt: demoTimestamp(-1, 9, 6) },
       { id: createId("msg"), role: "user", text: "Resúmeme el progreso actual", createdAt: demoTimestamp(-1, 9, 7) },
       { id: createId("msg"), role: "assistant", text: `Resumen actual:
 - 4 capítulos registrados con un progreso medio del 53%.
@@ -529,9 +529,9 @@ function updateAuthUI() {
 
   syncStatus.textContent = demoMode ? "Demo guiada" : auth.status === "offline" ? "Backend offline" : "Acceso privado";
   syncStatus.title = demoMode
-    ? "Estás recorriendo una tesis de ejemplo. Crea cuenta para empezar la tuya."
+    ? "Estás recorriendo una tesis de ejemplo. Solicita acceso si quieres trabajar con tu tesis real."
     : "Inicia sesión para entrar en tu espacio privado de tesis.";
-  authLabel.textContent = demoMode ? "Crear cuenta" : "Entrar";
+  authLabel.textContent = demoMode ? "Acceso beta" : "Entrar";
   logoutButton.hidden = true;
 }
 
@@ -1176,25 +1176,45 @@ function requiresAuthenticationWall() {
 function renderAuthGate() {
   screen.innerHTML = `
     <section class="hero-panel auth-gate-layout">
-      <div class="panel project-summary">
+      <div class="panel project-summary auth-gate-panel">
         <div>
+          <div class="badge-row auth-gate-badges">
+            <span class="badge gold">Workspace locked</span>
+            <span class="badge violet">Beta cerrada</span>
+            <span class="badge teal">Sincronización privada</span>
+          </div>
           <p class="eyebrow">Acceso privado</p>
-          <h2>Tu espacio de tesis solo se abre con cuenta</h2>
-          <p>DoctoralOS guarda capítulos, tareas, reuniones y comentarios dentro de una cuenta personal. Así evitamos mostrar el panel de trabajo a cualquiera que entre en la URL de la app.</p>
-          <div class="summary-actions">
+          <h2>Tu espacio doctoral vive detrás de una cuenta, no en abierto</h2>
+          <p>DoctoralOS protege capítulos, tareas, reuniones, comentarios y notas dentro de un workspace privado. Puedes entrar si ya formas parte de la beta, acceder con invitación o explorar la demo guiada para entender el producto antes de solicitar acceso.</p>
+          <div class="summary-actions auth-gate-actions">
             <button class="button" data-action="auth-launch" data-intent="login" type="button"><span data-icon="assistant"></span>Iniciar sesión</button>
-            <button class="ghost-button" data-action="auth-launch" data-intent="register" type="button"><span data-icon="plus"></span>Crear cuenta</button>
+            <button class="ghost-button" data-action="auth-launch" data-intent="register" type="button"><span data-icon="plus"></span>Entrar con invitación</button>
+          </div>
+          <div class="auth-gate-links">
+            <a class="auth-link-card" href="/">
+              <strong>Volver a la página pública</strong>
+              <span>Qué es DoctoralOS, cómo funciona, precios y acceso a la beta.</span>
+            </a>
+            <a class="auth-link-card" href="/app?demo=1">
+              <strong>Abrir demo guiada</strong>
+              <span>Explora una tesis de ejemplo y entiende el producto en menos de tres minutos.</span>
+            </a>
+            <a class="auth-link-card" href="mailto:mario.martinez.cgr@gmail.com?subject=Solicitud%20de%20acceso%20a%20DoctoralOS">
+              <strong>Solicitar acceso beta</strong>
+              <span>Escríbenos si quieres probar la app con tu tesis real o darnos feedback.</span>
+            </a>
           </div>
         </div>
-        <article class="card auth-gate-card">
-          <p class="card-kicker">Qué desbloqueas al entrar</p>
-          <h2>Un panel privado y sincronizado</h2>
+        <article class="card auth-gate-card locked-card">
+          <p class="card-kicker">Workspace locked</p>
+          <h2>Qué desbloqueas al entrar</h2>
           <ul class="quality-list compact-list">
             <li>Capítulos con editor, checklist y notas</li>
             <li>Plan semanal y revisión en un solo sitio</li>
             <li>Sesiones de escritura y respaldo exportable</li>
             <li>Asistente y foro listos para crecer contigo</li>
           </ul>
+          <p class="muted auth-gate-note">Pensado para una beta cerrada: menos ruido, mejor feedback y datos de tesis en un espacio personal.</p>
         </article>
       </div>
     </section>
@@ -1212,16 +1232,78 @@ function renderDashboard() {
   const demoBanner = demoMode ? `
     <section class="demo-banner panel">
       <div>
-        <p class="card-kicker">Demo guiada</p>
-        <h2>Estás viendo una tesis de ejemplo ya preparada para enseñar el producto</h2>
-        <p>Recorre el panel, abre el capítulo metodológico, revisa comentarios y prueba el asistente. Cuando quieras pasar a trabajo real, crea tu cuenta.</p>
+        <div class="badge-row auth-gate-badges">
+          <span class="badge gold">Demo guiada</span>
+          <span class="badge violet">Recorrido de 3 minutos</span>
+        </div>
+        <p class="card-kicker">Tesis de ejemplo</p>
+        <h2>Recorre el producto como lo haría un doctorando real</h2>
+        <p>Empieza por el panel para ver foco y próxima entrega, abre el capítulo metodológico para entender el editor y termina en revisión o asistente para ver cómo se cierran decisiones.</p>
+        <div class="demo-tour-grid">
+          <button class="demo-tour-card" data-action="go" data-view="dashboard" type="button">
+            <strong>1. Entiende el panel</strong>
+            <span>Foco semanal, progreso global y siguiente entrega en la misma vista.</span>
+          </button>
+          <button class="demo-tour-card" data-action="go" data-view="chapters" type="button">
+            <strong>2. Abre el capítulo metodológico</strong>
+            <span>Editor con secciones, checklist de calidad, notas y tareas del capítulo.</span>
+          </button>
+          <button class="demo-tour-card" data-action="go" data-view="assistant" type="button">
+            <strong>3. Prueba el asistente</strong>
+            <span>Pide un resumen, una agenda o una acción concreta dentro de la demo.</span>
+          </button>
+        </div>
       </div>
       <div class="summary-actions">
-        <a class="button" href="/app?auth=register">Crear cuenta</a>
+        <a class="button" href="mailto:mario.martinez.cgr@gmail.com?subject=Solicitud%20de%20acceso%20a%20DoctoralOS">Solicitar acceso beta</a>
         <button class="ghost-button" data-action="exit-demo" type="button">Salir demo</button>
       </div>
     </section>
   ` : "";
+
+  const dashboardJourney = demoMode ? `
+    <section class="onboarding-strip demo-journey-strip">
+      <article class="is-done">
+        <span class="step-number">1</span>
+        <h3>Panel ejecutivo</h3>
+        <p>Ve cómo DoctoralOS junta siguiente entrega, tareas activas y ritmo de trabajo.</p>
+        <button class="tiny-button" data-action="go" data-view="dashboard" type="button">Ver panel</button>
+      </article>
+      <article class="is-done">
+        <span class="step-number">2</span>
+        <h3>Capítulo activo</h3>
+        <p>Abre la parte metodológica y fíjate en estructura, notas y checklist de calidad.</p>
+        <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir capítulo</button>
+      </article>
+      <article class="is-done">
+        <span class="step-number">3</span>
+        <h3>Revisión y cierre</h3>
+        <p>Mira comentarios, reunión y asistente para entender cómo se convierte el feedback en acciones.</p>
+        <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir revisión</button>
+      </article>
+    </section>
+  ` : `
+    <section class="onboarding-strip">
+      <article class="${state.chapters.length ? "is-done" : ""}">
+        <span class="step-number">1</span>
+        <h3>Crea tus capítulos</h3>
+        <p>Define la estructura mínima y el capítulo activo.</p>
+        <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir</button>
+      </article>
+      <article class="${state.tasks.length ? "is-done" : ""}">
+        <span class="step-number">2</span>
+        <h3>Planifica la semana</h3>
+        <p>Convierte la tesis en tareas pequeñas con fecha.</p>
+        <button class="tiny-button" data-action="go" data-view="planner" type="button">Abrir</button>
+      </article>
+      <article class="${state.reviewComments.length || state.meetings.length ? "is-done" : ""}">
+        <span class="step-number">3</span>
+        <h3>Cierra comentarios</h3>
+        <p>Registra acuerdos y feedback accionable.</p>
+        <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir</button>
+      </article>
+    </section>
+  `;
 
   screen.innerHTML = `
     ${demoBanner}
@@ -1268,26 +1350,7 @@ function renderDashboard() {
       ${metric("Lecturas", `${readingLinked}/${state.readings.length}`, "vinculadas a capítulos")}
     </section>
 
-    <section class="onboarding-strip">
-      <article class="${state.chapters.length ? "is-done" : ""}">
-        <span class="step-number">1</span>
-        <h3>Crea tus capítulos</h3>
-        <p>Define la estructura mínima y el capítulo activo.</p>
-        <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir</button>
-      </article>
-      <article class="${state.tasks.length ? "is-done" : ""}">
-        <span class="step-number">2</span>
-        <h3>Planifica la semana</h3>
-        <p>Convierte la tesis en tareas pequeñas con fecha.</p>
-        <button class="tiny-button" data-action="go" data-view="planner" type="button">Abrir</button>
-      </article>
-      <article class="${state.reviewComments.length || state.meetings.length ? "is-done" : ""}">
-        <span class="step-number">3</span>
-        <h3>Cierra comentarios</h3>
-        <p>Registra acuerdos y feedback accionable.</p>
-        <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir</button>
-      </article>
-    </section>
+    ${dashboardJourney}
 
     <section class="grid-2">
       <article class="card">
@@ -1940,12 +2003,15 @@ function renderAssistantMessage(message) {
 
 function createInitialAssistantThread() {
   const intro = demoMode
-    ? `Esta es una demo guiada de DoctoralOS. Puedes recorrer una tesis de ejemplo, pedir un resumen del estado y crear acciones dentro de la demo.
+    ? `Estás en la demo guiada de DoctoralOS. Te recomiendo este recorrido corto:
+- Abre el panel para ver foco y siguiente entrega
+- Entra en Capítulos y revisa el método
+- Pídeme una agenda o un resumen dentro del Asistente
 
 Prueba algo como:
 - Resúmeme el progreso actual
 - Qué debería priorizar esta semana
-- Agendar reunión el viernes a las 16:00 con directora sobre metodología`
+- Prepara una agenda breve para la reunión con la directora`
     : `Soy el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.
 
 Prueba algo como:

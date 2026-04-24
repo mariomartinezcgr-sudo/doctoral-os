@@ -102,9 +102,9 @@
       <div class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <div class="section-header">
           <div>
-            <p class="eyebrow">Cuenta y sincronización</p>
+            <p class="eyebrow">Acceso privado y sincronización</p>
             <h2 id="authTitle">Entrar en DoctoralOS</h2>
-            <p>Con una cuenta, la tesis se guarda en el backend y puede sincronizarse entre navegadores o dispositivos que accedan a este servidor.</p>
+            <p>DoctoralOS funciona como beta cerrada: el trabajo real vive en una cuenta privada y el acceso nuevo puede requerir invitación o validación previa.</p>
           </div>
           <button class="icon-button" data-action="auth-close" type="button" aria-label="Cerrar">
             <span data-icon="check"></span>
@@ -126,7 +126,7 @@
           </form>
 
           <form class="form-panel form-grid" data-auth-form="register">
-            <h3>Crear cuenta</h3>
+            <h3>Acceso con invitación</h3>
             <div class="field">
               <label for="registerName">Nombre</label>
               <input id="registerName" name="name" type="text" autocomplete="name">
@@ -139,7 +139,12 @@
               <label for="registerPassword">Contraseña</label>
               <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
             </div>
-            <button class="button" type="submit">Crear y sincronizar</button>
+            <div class="field">
+              <label for="registerInviteCode">Código de invitación beta</label>
+              <input id="registerInviteCode" name="inviteCode" type="text" autocomplete="off" placeholder="Opcional si tu correo ya está invitado">
+              <p class="form-help">Si tu correo está aprobado, el código puede no hacer falta. Si no, usa tu invitación o escríbenos para solicitar acceso.</p>
+            </div>
+            <button class="button" type="submit">Entrar en la beta</button>
           </form>
         </div>
       </div>

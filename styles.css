@@ -2021,6 +2021,11 @@ tr:last-child td {
 
 .auth-gate-panel {
   gap: 24px;
+  align-items: stretch;
+}
+
+.auth-gate-badges {
+  margin: 0 0 14px;
 }
 
 .auth-gate-actions {
@@ -2029,7 +2034,7 @@ tr:last-child td {
 
 .auth-gate-links {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -2037,12 +2042,75 @@ tr:last-child td {
   align-self: stretch;
 }
 
+.locked-card {
+  border-color: #d7e0e5;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+}
+
 .auth-gate-card ul {
   margin: 0;
 }
 
+.auth-gate-note {
+  margin-top: 16px;
+}
+
+.demo-tour-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.demo-tour-card {
+  min-height: 142px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #d4dee3;
+  border-radius: var(--radius);
+  background: #ffffff;
+  color: var(--ink);
+  text-align: left;
+  box-shadow: 0 8px 22px rgba(25, 38, 44, 0.05);
+}
+
+.demo-tour-card strong {
+  font-size: 0.98rem;
+}
+
+.demo-tour-card span {
+  color: var(--muted);
+}
+
+.demo-tour-card:hover,
+.demo-tour-card:focus-visible {
+  border-color: #bfd5d1;
+  background: #fbfdfd;
+}
+
+.demo-journey-strip article {
+  min-height: 172px;
+}
+
+.form-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 1180px) {
+  .auth-gate-links,
+  .demo-tour-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 860px) {
-  .auth-gate-links {
+  .auth-gate-links,
+  .demo-tour-grid {
     grid-template-columns: 1fr;
   }
 }
