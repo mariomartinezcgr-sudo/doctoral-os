@@ -21,6 +21,8 @@ const rateLimitStore = new Map();
 const CLOSED_BETA = /^(1|true|yes)$/i.test(String(process.env.CLOSED_BETA || (process.env.NODE_ENV === "production" ? "1" : "0")));
 const BETA_INVITE_CODE = String(process.env.BETA_INVITE_CODE || "").trim();
 const BETA_ALLOWED_EMAILS = new Set(String(process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => normalizeEmail(email)).filter(Boolean));
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
+const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -90,6 +92,14 @@ function openDatabase() {
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       state_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT
     );
   `);
   migrateLegacyJson(database);
@@ -179,6 +189,99 @@ async function handleApi(req, res) {
     insertSession(session);
     pruneSessions();
     sendJson(res, 200, { ...publicSessionPayload(user), state: getUserState(user.id) }, {
+      "Set-Cookie": buildSessionCookie(req, session.token, session.expires_at)
+    });
+    return;
+  }
+
+  
+  if (req.method === "POST" && pathname === "/api/password-reset/request") {
+    if (!enforceRateLimit(req, res, "password-reset-request", 6)) return;
+    const body = await readJson(req);
+    const email = normalizeEmail(body.email);
+
+    if (!isValidEmail(email)) {
+      sendJson(res, 400, { error: "Escribe un email válido para preparar la recuperación." });
+      return;
+    }
+
+    prunePasswordResetTokens();
+    const user = findUserByEmail(email);
+    let previewUrl = "";
+    if (user) {
+      db.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").run(user.id);
+      const resetToken = createPasswordResetToken(user.id);
+      insertPasswordResetToken(resetToken);
+      const recoveryLink = buildPasswordResetLink(req, resetToken.token);
+      console.info("[DoctoralOS] Password reset for " + email + ": " + recoveryLink);
+      if (process.env.NODE_ENV !== "production") {
+        previewUrl = recoveryLink;
+      }
+    }
+
+    if (previewUrl) {
+      sendJson(res, 200, {
+        ok: true,
+        delivery: "preview",
+        supportEmail: SUPPORT_EMAIL,
+        previewUrl,
+        message: "Hemos preparado un enlace de recuperación para esta cuenta de prueba."
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      delivery: "assisted",
+      supportEmail: SUPPORT_EMAIL,
+      message: "Si la cuenta existe, ya hemos preparado un enlace seguro de recuperación. Durante la beta, la entrega se gestiona de forma asistida."
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/password-reset/confirm") {
+    if (!enforceRateLimit(req, res, "password-reset-confirm", 10)) return;
+    const body = await readJson(req);
+    const token = String(body.token || "").trim();
+    const newPassword = String(body.newPassword || "");
+
+    if (!token) {
+      sendJson(res, 400, { error: "El enlace de recuperación no es válido." });
+      return;
+    }
+    if (newPassword.length < 8) {
+      sendJson(res, 400, { error: "La nueva contraseña debe tener al menos 8 caracteres." });
+      return;
+    }
+
+    prunePasswordResetTokens();
+    const resetToken = findPasswordResetToken(token);
+    if (!resetToken) {
+      sendJson(res, 400, { error: "Este enlace de recuperación ya no es válido o ha caducado." });
+      return;
+    }
+
+    const user = findUserById(resetToken.user_id);
+    if (!user) {
+      sendJson(res, 400, { error: "No se ha encontrado la cuenta asociada a este enlace." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const session = createSession(user.id);
+    db.exec("BEGIN");
+    try {
+      db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(hashPassword(newPassword), now, user.id);
+      db.prepare("UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL").run(now, user.id);
+      db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
+      insertSession(session);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+
+    sendJson(res, 200, { ...publicSessionPayload(findUserById(user.id)), state: getUserState(user.id), recovered: true }, {
       "Set-Cookie": buildSessionCookie(req, session.token, session.expires_at)
     });
     return;
@@ -586,6 +689,53 @@ function insertSession(session) {
 
 function pruneSessions() {
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(new Date().toISOString());
+}
+
+function hashPasswordResetToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function createPasswordResetToken(userId) {
+  const now = new Date();
+  const expires = new Date(now.getTime() + PASSWORD_RESET_TTL_SECONDS * 1000);
+  const token = crypto.randomBytes(32).toString("base64url");
+  return {
+    token,
+    token_hash: hashPasswordResetToken(token),
+    user_id: userId,
+    created_at: now.toISOString(),
+    expires_at: expires.toISOString()
+  };
+}
+
+function insertPasswordResetToken(record) {
+  db.prepare("INSERT INTO password_reset_tokens (token_hash, user_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)")
+    .run(record.token_hash, record.user_id, record.created_at, record.expires_at);
+}
+
+function prunePasswordResetTokens() {
+  const now = new Date().toISOString();
+  db.prepare("DELETE FROM password_reset_tokens WHERE expires_at <= ? OR used_at IS NOT NULL").run(now);
+}
+
+function findPasswordResetToken(token) {
+  const tokenHash = hashPasswordResetToken(token);
+  return db.prepare("SELECT * FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ? AND used_at IS NULL")
+    .get(tokenHash, new Date().toISOString());
+}
+
+function buildAppBaseUrl(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = forwardedHost || String(req.headers.host || "").trim() || (HOST + ":" + PORT);
+  const protocol = forwardedProto || (isSecureRequest(req) ? "https" : "http");
+  return protocol + "://" + host;
+}
+
+function buildPasswordResetLink(req, token) {
+  const url = new URL("/app", buildAppBaseUrl(req));
+  url.searchParams.set("reset", token);
+  return url.toString();
 }
 
 function publicSessionPayload(user) {

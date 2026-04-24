@@ -23,7 +23,7 @@ const icons = {
   review: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 4h11l3 3v13H5V4Z"/><path d="M16 4v4h4"/><path d="M8 12h8"/><path d="M8 16h5"/><path d="m14 19 2 2 4-5"/></svg>',
   writing: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 20h16"/><path d="M6 16 17.5 4.5a2.1 2.1 0 0 1 3 3L9 19l-4 1 1-4Z"/></svg>',
   assistant: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v3"/><path d="M9 6h6"/><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M9 18v2"/><path d="M15 18v2"/><path d="M3 11v3"/><path d="M21 11v3"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="12" r="1"/><path d="M9 15h6"/></svg>',
-  forum: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4V6Z"/><path d="M8 9h8"/><path d="M8 13h6"/></svg>',
+  forum: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M17 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M3 20a5 5 0 0 1 8 0"/><path d="M13 20a5 5 0 0 1 8 0"/><path d="M10 12h4"/><path d="m11 15 1-1 1 1"/></svg>',
   print: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-5h18v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7v-7Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M4 3h16"/></svg>',
@@ -92,6 +92,11 @@ const authButton = document.querySelector("#authButton");
 const authLabel = document.querySelector("#authLabel");
 const logoutButton = document.querySelector("#logoutButton");
 const authModal = document.querySelector("#authModal");
+const authTitle = document.querySelector("#authTitle");
+const authDescription = document.querySelector("#authDescription");
+const authGrid = document.querySelector("#authGrid");
+let authModalMode = "login";
+let pendingResetToken = "";
 
 init();
 
@@ -537,6 +542,16 @@ function updateAuthUI() {
 
 function maybeOpenAuthFromUrl() {
   const url = new URL(window.location.href);
+  const resetToken = url.searchParams.get("reset");
+  if (resetToken && !auth.user) {
+    pendingResetToken = resetToken;
+    openAuthModal("reset");
+    return;
+  }
+  if (resetToken && auth.user) {
+    clearResetQueryParam();
+  }
+
   const intent = url.searchParams.get("auth");
   if (!intent || auth.user) return;
   openAuthModal(intent === "register" ? "register" : "login");
@@ -549,20 +564,82 @@ function openAuthModal(intent = "login") {
     showToast("Abre la app desde el servidor para usar cuentas");
     return;
   }
+
+  authModalMode = ["register", "recover", "reset"].includes(intent) ? intent : "login";
   authModal.hidden = false;
+  syncAuthPanels();
   hydrateIcons(authModal);
-  const focusTarget = intent === "register" ? "#registerName" : "#loginEmail";
-  authModal.querySelector(focusTarget)?.focus();
+  focusAuthField();
 }
 
 function closeAuthModal() {
   authModal.hidden = true;
 }
 
+function clearResetQueryParam() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("reset")) return;
+  url.searchParams.delete("reset");
+  window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+}
+
+function authModalCopy(mode) {
+  if (mode === "recover") {
+    return {
+      title: "Recuperar acceso",
+      description: "Solicita un enlace seguro para restablecer tu contraseña. Durante esta beta, la entrega del enlace se gestiona de forma asistida para mantener el acceso más controlado."
+    };
+  }
+  if (mode === "reset") {
+    return {
+      title: "Elegir nueva contraseña",
+      description: "Ya tienes un enlace válido de recuperación. Define una contraseña nueva y entraremos directamente en tu espacio privado."
+    };
+  }
+  return {
+    title: "Entrar en DoctoralOS",
+    description: "DoctoralOS funciona como beta cerrada: el trabajo real vive en una cuenta privada y el acceso nuevo puede requerir invitación o validación previa."
+  };
+}
+
+function syncAuthPanels() {
+  const singlePanelMode = authModalMode === "recover" || authModalMode === "reset";
+  authModal.querySelectorAll("[data-auth-panel]").forEach((panel) => {
+    const panelName = panel.dataset.authPanel;
+    const visible = singlePanelMode
+      ? panelName === authModalMode
+      : panelName === "login" || panelName === "register";
+    panel.hidden = !visible;
+  });
+
+  authGrid?.classList.toggle("is-single", singlePanelMode);
+  const copy = authModalCopy(authModalMode);
+  if (authTitle) authTitle.textContent = copy.title;
+  if (authDescription) authDescription.textContent = copy.description;
+
+  const resetTokenField = authModal.querySelector("#resetToken");
+  if (resetTokenField) resetTokenField.value = pendingResetToken;
+}
+
+function focusAuthField() {
+  const focusTarget = {
+    login: "#loginEmail",
+    register: "#registerName",
+    recover: "#recoverEmail",
+    reset: "#resetNewPassword"
+  }[authModalMode] || "#loginEmail";
+  authModal.querySelector(focusTarget)?.focus();
+}
+
 function handleAuthModalClick(event) {
   if (event.target === authModal || event.target.closest("[data-action='auth-close']")) {
     closeAuthModal();
+    return;
   }
+
+  const switchButton = event.target.closest("[data-action='auth-switch']");
+  if (!switchButton) return;
+  openAuthModal(switchButton.dataset.intent || "login");
 }
 
 async function handleAuthSubmit(event) {
@@ -573,33 +650,65 @@ async function handleAuthSubmit(event) {
   const mode = form.dataset.authForm;
   const payload = Object.fromEntries(new FormData(form).entries());
 
+  if (mode === "password-reset-confirm") {
+    const newPassword = String(payload.newPassword || "");
+    const confirmPassword = String(payload.confirmPassword || "");
+    if (newPassword !== confirmPassword) {
+      showToast("Las contraseñas nuevas no coinciden");
+      return;
+    }
+    delete payload.confirmPassword;
+  }
+
   try {
-    setAuthStatus("Conectando");
-    const response = await fetch(`/api/${mode}`, {
+    setAuthStatus(mode.startsWith("password-reset") ? "Preparando recuperación" : "Conectando");
+    const endpoint = mode === "password-reset-request"
+      ? "/api/password-reset/request"
+      : mode === "password-reset-confirm"
+        ? "/api/password-reset/confirm"
+        : "/api/" + mode;
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "No se pudo iniciar sesión");
+    if (!response.ok) throw new Error(result.error || "No se pudo completar la solicitud");
+
+    if (mode === "password-reset-request") {
+      form.reset();
+      if (result.previewUrl) {
+        const previewUrl = new URL(result.previewUrl, window.location.origin);
+        pendingResetToken = previewUrl.searchParams.get("reset") || "";
+        window.history.replaceState({}, "", previewUrl.pathname + previewUrl.search + previewUrl.hash);
+        openAuthModal("reset");
+        showToast("Enlace de recuperación preparado en entorno de prueba");
+        return;
+      }
+      openAuthModal("login");
+      showToast(result.message || "Si la cuenta existe, ya hemos preparado la recuperación.");
+      return;
+    }
 
     applySession(result);
     if (result.state && Object.keys(result.state).length) {
       state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state));
       saveState("", { skipSync: true });
-    } else if (mode === "register" || result.isNewUser) {
-      state = createFreshState(result.user);
-      saveState("", { skipSync: true });
-      await syncNow(false);
     } else {
       state = createFreshState(result.user);
       saveState("", { skipSync: true });
       await syncNow(false);
     }
 
+    if (mode === "password-reset-confirm") {
+      pendingResetToken = "";
+      clearResetQueryParam();
+    }
+
     closeAuthModal();
     form.reset();
-    showToast("Cuenta sincronizada");
+    showToast(mode === "password-reset-confirm" ? "Contraseña actualizada" : "Cuenta sincronizada");
     render();
   } catch (error) {
     setAuthStatus("Error");

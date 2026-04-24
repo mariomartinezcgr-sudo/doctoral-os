@@ -1261,6 +1261,27 @@ tr:last-child td {
   gap: 14px;
 }
 
+.auth-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-auth-panel][hidden] {
+  display: none !important;
+}
+
+.auth-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.subtle-button {
+  min-height: 38px;
+  padding-inline: 12px;
+  font-size: 0.92rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

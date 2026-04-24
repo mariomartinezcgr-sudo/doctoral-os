@@ -8,7 +8,7 @@ const ROOT = path.resolve(__dirname, "..");
 const BASE_PORT = 4297;
 
 async function main() {
-  await withServer(BASE_PORT, {}, async ({ request }) => {
+  await withServer(BASE_PORT, { NODE_ENV: "test" }, async ({ request }) => {
     const email = `test-${Date.now()}@example.com`;
     const register = await request("/api/register", {
       method: "POST",
@@ -80,9 +80,38 @@ async function main() {
     });
     assert.equal(relogin.status, 200);
 
+    const resetRequest = await request("/api/password-reset/request", {
+      method: "POST",
+      body: { email }
+    });
+    assert.equal(resetRequest.status, 200);
+    assert.equal(resetRequest.body.delivery, "preview");
+    assert.ok(resetRequest.body.previewUrl);
+    const resetToken = new URL(resetRequest.body.previewUrl).searchParams.get("reset");
+    assert.ok(resetToken);
+
+    const resetConfirm = await request("/api/password-reset/confirm", {
+      method: "POST",
+      body: { token: resetToken, newPassword: "password789" }
+    });
+    assert.equal(resetConfirm.status, 200);
+    assert.ok(resetConfirm.cookie);
+
+    const reusedReset = await request("/api/password-reset/confirm", {
+      method: "POST",
+      body: { token: resetToken, newPassword: "password999" }
+    });
+    assert.equal(reusedReset.status, 400);
+
+    const resetLogin = await request("/api/login", {
+      method: "POST",
+      body: { email, password: "password789" }
+    });
+    assert.equal(resetLogin.status, 200);
+
     const logout = await request("/api/logout", {
       method: "POST",
-      cookie: relogin.cookie
+      cookie: resetLogin.cookie
     });
     assert.equal(logout.status, 200);
     assert.ok(logout.setCookie.includes("Max-Age=0"));
