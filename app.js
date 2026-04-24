@@ -68,7 +68,8 @@ const defaultState = {
   reviewComments: [],
   writingLog: [],
   forumTopics: [],
-  assistantThread: []
+  assistantThread: [],
+  analyticsRange: "week"
 };
 
 let demoMode = isDemoRequested();
@@ -216,6 +217,9 @@ function ensureStateShape(target) {
   if (!V1_VIEWS.includes(target.activeView)) {
     target.activeView = "dashboard";
   }
+  if (!["day", "week"].includes(target.analyticsRange)) {
+    target.analyticsRange = "week";
+  }
   return target;
 }
 
@@ -244,7 +248,8 @@ function createFreshState(user = {}) {
     reviewComments: [],
     writingLog: [],
     forumTopics: [],
-    assistantThread: createInitialAssistantThread()
+    assistantThread: createInitialAssistantThread(),
+    analyticsRange: "week"
   });
 }
 
@@ -898,6 +903,13 @@ function handleScreenClick(event) {
     return;
   }
 
+  if (action === "analytics-range") {
+    state.analyticsRange = target.dataset.value === "day" ? "day" : "week";
+    saveState("", { skipSync: true });
+    render();
+    return;
+  }
+
   if (action === "exit-demo") {
     demoMode = false;
     clearDemoQuery();
@@ -1352,6 +1364,7 @@ function renderDashboard() {
   const pendingComments = state.reviewComments.filter((item) => item.status !== "Resuelto").length;
   const wordsThisWeek = writingWordsLastDays(7);
   const hasStarted = state.chapters.length || state.tasks.length || state.meetings.length || state.reviewComments.length;
+  const analytics = buildAnalyticsSnapshot();
   const demoBanner = demoMode ? `
     <section class="demo-banner panel">
       <div>
@@ -1475,6 +1488,8 @@ function renderDashboard() {
     </section>
 
     ${dashboardJourney}
+
+    ${renderAnalyticsSection(analytics)}
 
     <section class="grid-2">
       <article class="card">
@@ -2159,10 +2174,10 @@ function assistantSuggestions() {
   return [
     "Qué debería priorizar esta semana",
     "Resúmeme el progreso actual",
+    "Analiza mi ritmo de escritura de las últimas semanas",
+    "Dónde está mi cuello de botella ahora mismo",
     "Agendar reunión el viernes a las 16:00 con directora sobre metodología",
-    "Crear tarea cerrar comentarios del capítulo 2 para mañana",
-    "Añade nota al capítulo 1: abrir la introducción con el problema de investigación",
-    "Registrar comentario del director en capítulo 2: falta justificar la muestra para el viernes"
+    "Crear tarea cerrar comentarios del capítulo 2 para mañana"
   ];
 }
 
@@ -2239,6 +2254,7 @@ function buildAssistantReply(message) {
 
   if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
   if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
+  if (isPerformanceAdviceRequest(normalized)) return { reply: buildPerformanceAdvice() };
   if (isMeetingCreationRequest(normalized)) return createMeetingFromPrompt(message);
   if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
   if (isCommentCreationRequest(normalized)) return createReviewCommentFromPrompt(message);
@@ -2281,37 +2297,63 @@ function isMeetingAdviceRequest(normalized) {
   return normalized.includes("reunion") && (normalized.includes("que llevo") || normalized.includes("preparar") || normalized.includes("agenda recomendada"));
 }
 
+function isPerformanceAdviceRequest(normalized) {
+  return normalized.includes("ritmo") || normalized.includes("rendimiento") || normalized.includes("cuello de botella") || normalized.includes("atascado") || normalized.includes("analiza") || normalized.includes("productividad");
+}
+
 function buildProgressSummary() {
+  const analytics = buildAnalyticsSnapshot();
   const openTasks = state.tasks.filter((task) => task.status !== "later").length;
-  const pendingComments = state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
-  const wordsThisWeek = writingWordsLastDays(7);
+  const pendingComments = Number(analytics.reviewCounts.Pendientes || 0) + Number(analytics.reviewCounts["En proceso"] || 0);
   const nextMeeting = upcomingMeeting();
   const lines = [
     `- ${state.chapters.length} capítulos registrados con un progreso medio del ${overallProgress()}%.`,
-    `- ${openTasks} tareas activas y ${pendingComments} comentarios abiertos.`,
-    `- ${state.meetings.length} reuniones registradas.`,
-    `- ${formatNumber(wordsThisWeek)} palabras escritas en los últimos 7 días.`
+    `- ${openTasks} tareas activas y ${pendingComments} comentarios vivos.`,
+    `- Escritura reciente: ${formatNumber(analytics.wordsLast7)} palabras en 7 días (${analytics.writingTrend.toLowerCase()}).`,
+    `- Lecturas activas: ${analytics.readingCounts.Leyendo} en curso y ${analytics.readingCounts.Clave} clave.`
   ];
   if (nextMeeting) lines.push(`- Próxima reunión detectada: ${formatMeetingLabel(nextMeeting)}.`);
-  return `Resumen actual:
-${lines.join("\n")}\n\nMi siguiente recomendación: ${recommendNextMove()}`;
+  return `Resumen actual:\n${lines.join("\n")}\n\nMi siguiente recomendación: ${buildAnalyticsLead(analytics)}`;
 }
 
 function buildWeeklyPriorities() {
+  const analytics = buildAnalyticsSnapshot();
   const lines = [];
-  const urgentComment = [...state.reviewComments]
-    .filter((comment) => comment.status !== "Resuelto")
-    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+  const urgentComment = findUrgentComment();
   const urgentTask = [...state.tasks]
     .filter((task) => task.status !== "later")
     .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
   const chapter = nextChapterToPush();
+  if (!analytics.wordsLast7) {
+    lines.push("- Recupera el ritmo con una sesión corta de escritura antes de abrir más lecturas.");
+  } else if (analytics.wordsDelta < 0) {
+    lines.push(`- Tu escritura ha bajado frente a la semana previa; protege una sesión cerrada para ${chapter ? chapter.title : "tu capítulo principal"}.`);
+  }
   if (urgentTask) lines.push(`- Tarea prioritaria: ${urgentTask.title}${urgentTask.due ? ` antes del ${formatDate(urgentTask.due)}` : ""}.`);
   if (urgentComment) lines.push(`- Cierra el comentario de ${urgentComment.chapter}${urgentComment.due ? ` antes del ${formatDate(urgentComment.due)}` : ""}.`);
   if (chapter) lines.push(`- Empuja ${chapter.title}: está cerca de entrega y va por ${chapter.progress}% de avance.`);
+  if ((analytics.readingCounts.Leyendo + analytics.readingCounts.Clave) > analytics.readingCounts["Leídas"] && analytics.wordsLast7 < 1200) {
+    lines.push("- Convierte una lectura activa en un párrafo útil en lugar de abrir más fuentes esta semana.");
+  }
   if (!lines.length) lines.push("- Crea un capítulo activo o una tarea semanal para empezar a mover la tesis.");
-  return `Te propongo este foco para la semana:
-${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revisión y una administrativa como máximo.`;
+  return `Te propongo este foco para la semana:\n${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revisión y una administrativa como máximo.`;
+}
+
+function buildPerformanceAdvice() {
+  const analytics = buildAnalyticsSnapshot();
+  const reviewActive = Number(analytics.reviewCounts.Pendientes || 0) + Number(analytics.reviewCounts["En proceso"] || 0);
+  const lines = [
+    `- Escritura reciente: ${formatNumber(analytics.wordsLast7)} palabras en 7 días y ${analytics.streakWeeks} semana${analytics.streakWeeks === 1 ? "" : "s"} seguida${analytics.streakWeeks === 1 ? "" : "s"} con actividad.`,
+    `- Revisión: ${reviewActive} comentario${reviewActive === 1 ? "" : "s"} vivo${reviewActive === 1 ? "" : "s"}.`,
+    `- Lecturas: ${analytics.readingCounts.Leyendo} en lectura, ${analytics.readingCounts.Clave} clave y ${analytics.readingCounts["Leídas"]} ya cerradas.`
+  ];
+  if (analytics.stalledChapter) {
+    lines.push(`- Capítulo más expuesto ahora mismo: ${analytics.stalledChapter.title} (${analytics.stalledChapter.progress}% y entrega ${formatDate(analytics.stalledChapter.due)}).`);
+  }
+  if (analytics.tasksOverdue) {
+    lines.push(`- Hay ${analytics.tasksOverdue} tarea${analytics.tasksOverdue === 1 ? "" : "s"} vencida${analytics.tasksOverdue === 1 ? "" : "s"}.`);
+  }
+  return `Lectura de rendimiento:\n${lines.join("\n")}\n\nMi recomendación: ${buildAnalyticsLead(analytics)}`;
 }
 
 function buildMeetingAdvice() {
@@ -2453,10 +2495,14 @@ function createChapterNoteFromPrompt(message) {
   };
 }
 
-function recommendNextMove() {
-  const urgentComment = [...state.reviewComments]
+function findUrgentComment() {
+  return [...state.reviewComments]
     .filter((comment) => comment.status !== "Resuelto")
-    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+}
+
+function recommendNextMove() {
+  const urgentComment = findUrgentComment();
   if (urgentComment) return `cerrar el comentario abierto de ${urgentComment.chapter}`;
   const urgentTask = [...state.tasks]
     .filter((task) => task.status !== "later")
@@ -2804,6 +2850,338 @@ Palabras pendientes aproximadas: ${formatNumber(remaining)}
 Plan de 10 sesiones: ${formatNumber(daily)} palabras por sesión
 Primera sesión: escribir solo el párrafo puente que conecte objetivo, argumento y fuentes
 Criterio de cierre: terminar con una decisión visible, no con más lecturas pendientes`;
+}
+
+function buildAnalyticsSnapshot() {
+  const writingSeries = buildWritingSeries(state.analyticsRange);
+  const wordsLast7 = writingWordsLastDays(7);
+  const wordsPrevious7 = writingWordsBetweenDays(7, 13);
+  const reviewCounts = reviewStatusCounts();
+  const readingCounts = readingStatusCounts();
+  const stalledChapter = findMostStalledChapter();
+  const activeChapters = state.chapters.filter((chapter) => Number(chapter.progress || 0) > 0).length;
+  const threshold = addDays(startOfLocalDay(new Date()), -6);
+  const chaptersUpdatedThisWeek = state.chapters.filter((chapter) => {
+    if (!chapter.editorUpdatedAt) return false;
+    return new Date(chapter.editorUpdatedAt) >= threshold;
+  }).length;
+  return {
+    range: state.analyticsRange,
+    writingSeries,
+    wordsLast7,
+    wordsPrevious7,
+    wordsDelta: wordsLast7 - wordsPrevious7,
+    writingTrend: buildWritingTrendText(wordsLast7, wordsPrevious7),
+    streakWeeks: countConsecutiveWritingWeeks(),
+    stalledChapter,
+    reviewCounts,
+    readingCounts,
+    activeChapters,
+    chaptersUpdatedThisWeek,
+    tasksOverdue: state.tasks.filter((task) => task.due && task.due < todayISO() && task.status !== "later").length,
+    chapters: [...state.chapters]
+      .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")) || Number(a.progress || 0) - Number(b.progress || 0))
+      .slice(0, 6)
+  };
+}
+
+function renderAnalyticsSection(analytics) {
+  return `
+    <section class="analytics-shell">
+      <div class="section-header analytics-header">
+        <div>
+          <p class="card-kicker">Analítica útil</p>
+          <h2>Ritmo, carga y focos reales</h2>
+          <p>Lee la semana en una sola vista: escritura, capítulos, revisión y lecturas.</p>
+        </div>
+        <div class="segmented-control" role="tablist" aria-label="Rango del gráfico de escritura">
+          <button class="tab-button ${state.analyticsRange === "day" ? "is-active" : ""}" data-action="analytics-range" data-value="day" type="button">Días</button>
+          <button class="tab-button ${state.analyticsRange === "week" ? "is-active" : ""}" data-action="analytics-range" data-value="week" type="button">Semanas</button>
+        </div>
+      </div>
+
+      <div class="analytics-summary-grid">
+        ${metric("Racha", analytics.streakWeeks, analytics.streakWeeks ? "semanas con escritura" : "sin continuidad todavía")}
+        ${metric("Capítulos activos", analytics.activeChapters, `${analytics.chaptersUpdatedThisWeek} tocados en los últimos 7 días`)}
+        ${metric("Tareas vencidas", analytics.tasksOverdue, analytics.tasksOverdue ? "requieren limpieza inmediata" : "sin retrasos críticos")}
+      </div>
+
+      <article class="panel analytics-insight">
+        <p class="card-kicker">Lectura rápida</p>
+        <h3>${analytics.stalledChapter ? escapeHtml(analytics.stalledChapter.title) : "Buen momento para sostener el ritmo"}</h3>
+        <p>${escapeHtml(buildAnalyticsLead(analytics))}</p>
+      </article>
+
+      <div class="analytics-grid">
+        ${renderWritingChart(analytics)}
+        <article class="card analytics-card">
+          <div class="section-header">
+            <div>
+              <p class="card-kicker">Capítulos</p>
+              <h2>Progreso por capítulo</h2>
+            </div>
+          </div>
+          <div class="analytics-list">
+            ${renderChapterProgressAnalytics(analytics.chapters)}
+          </div>
+        </article>
+        ${renderDistributionTrack("Revisión", "Comentarios abiertos, en proceso y resueltos.", analytics.reviewCounts, ["#c89f32", "#e4bd64", "#f3e6c0"])}
+        ${renderDistributionTrack("Lecturas", "Dónde está ahora mismo tu base de fuentes.", analytics.readingCounts, ["#6157a8", "#8a82c8", "#c5c1ea", "#dddaf5"])}
+      </div>
+    </section>
+  `;
+}
+
+function buildWritingSeries(range) {
+  return range === "day" ? buildWritingDaySeries(14) : buildWritingWeekSeries(8);
+}
+
+function buildWritingDaySeries(days) {
+  const series = [];
+  const today = startOfLocalDay(new Date());
+  for (let index = days - 1; index >= 0; index -= 1) {
+    const date = addDays(today, -index);
+    const iso = toLocalISODate(date);
+    const words = writingWordsOnDate(iso);
+    series.push({
+      id: iso,
+      label: formatChartDayLabel(date),
+      value: words,
+      title: `${formatChartDayLabel(date)} · ${formatNumber(words)} palabras`
+    });
+  }
+  return series;
+}
+
+function buildWritingWeekSeries(weeks) {
+  const series = [];
+  const currentWeekStart = startOfLocalWeek(new Date());
+  for (let index = weeks - 1; index >= 0; index -= 1) {
+    const start = addDays(currentWeekStart, -index * 7);
+    const end = addDays(start, 6);
+    const words = writingWordsBetweenDates(start, end);
+    series.push({
+      id: toLocalISODate(start),
+      label: formatChartWeekLabel(start, end),
+      value: words,
+      title: `${formatChartWeekLabel(start, end)} · ${formatNumber(words)} palabras`
+    });
+  }
+  return series;
+}
+
+function renderWritingChart(analytics) {
+  const max = Math.max(...analytics.writingSeries.map((item) => item.value), 1);
+  return `
+    <article class="card analytics-card analytics-wide">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Escritura</p>
+          <h2>Palabras por ${analytics.range === "day" ? "día" : "semana"}</h2>
+        </div>
+        <div class="analytics-chip-row">
+          <span class="analytics-chip">${formatNumber(analytics.wordsLast7)} palabras / 7 días</span>
+          <span class="analytics-chip">${analytics.writingTrend}</span>
+        </div>
+      </div>
+      <div class="analytics-chart" role="img" aria-label="Gráfico de escritura por ${analytics.range === "day" ? "día" : "semana"}">
+        ${analytics.writingSeries.map((item) => `
+          <div class="chart-bar" title="${escapeAttribute(item.title)}">
+            <span class="chart-bar-value">${compactNumber(item.value)}</span>
+            <div class="chart-bar-track"><span style="--height:${Math.max(10, Math.round((item.value / max) * 100))}%"></span></div>
+            <span class="chart-bar-label">${escapeHtml(item.label)}</span>
+          </div>
+        `).join("")}
+      </div>
+      <p class="muted analytics-footnote">${analytics.streakWeeks ? `Llevas ${analytics.streakWeeks} semana${analytics.streakWeeks === 1 ? "" : "s"} consecutiva${analytics.streakWeeks === 1 ? "" : "s"} con escritura registrada.` : "Todavía no hay una racha estable de escritura; conviene consolidar dos sesiones por semana como mínimo."}</p>
+    </article>
+  `;
+}
+
+function renderChapterProgressAnalytics(chapters) {
+  if (!chapters.length) return emptyState("Todavía no hay capítulos suficientes para mostrar progreso.");
+  return chapters.map((chapter) => `
+    <div class="analytics-chapter-row">
+      <div class="analytics-chapter-head">
+        <strong>${escapeHtml(chapter.title)}</strong>
+        ${statusPill(chapter.status)}
+      </div>
+      <div class="progress-bar analytics-progress"><span style="--width:${clamp(chapter.progress, 0, 100)}%"></span></div>
+      <div class="analytics-chapter-meta">
+        <span>${chapter.progress}%</span>
+        <span>${formatNumber(chapter.words)} / ${formatNumber(chapter.target)} palabras</span>
+        <span>Calidad ${qualityProgress(chapter)}%</span>
+        <span>${chapter.due ? `Entrega ${formatDate(chapter.due)}` : "Sin fecha cerrada"}</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderDistributionTrack(title, description, counts, palette) {
+  const entries = Object.entries(counts).filter(([, value]) => value > 0);
+  const total = entries.reduce((sum, [, value]) => sum + Number(value || 0), 0);
+  return `
+    <article class="card analytics-card">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">${escapeHtml(title)}</p>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+      </div>
+      <p class="muted">${escapeHtml(description)}</p>
+      ${total ? `
+        <div class="distribution-track">
+          ${entries.map(([label, value], index) => `
+            <span class="distribution-segment" style="width:${Math.max(8, (value / total) * 100)}%; background:${palette[index % palette.length]};" title="${escapeAttribute(`${label}: ${value}`)}"></span>
+          `).join("")}
+        </div>
+        <div class="distribution-legend">
+          ${entries.map(([label, value], index) => `
+            <div class="legend-item">
+              <span class="legend-dot" style="background:${palette[index % palette.length]};"></span>
+              <strong>${value}</strong>
+              <span>${escapeHtml(label)}</span>
+            </div>
+          `).join("")}
+        </div>
+      ` : emptyState(`Aún no hay datos de ${title.toLowerCase()}.`)}
+    </article>
+  `;
+}
+
+function buildAnalyticsLead(analytics) {
+  const openReview = Number(analytics.reviewCounts.Pendientes || 0) + Number(analytics.reviewCounts["En proceso"] || 0);
+  const readingsInFlight = Number(analytics.readingCounts.Leyendo || 0) + Number(analytics.readingCounts.Clave || 0);
+  if (!analytics.wordsLast7) {
+    return "Llevas una semana sin escritura registrada. Antes de abrir más lecturas, reactiva una sesión breve y medible.";
+  }
+  if (analytics.tasksOverdue) {
+    return `Hay ${analytics.tasksOverdue} tarea${analytics.tasksOverdue === 1 ? "" : "s"} vencida${analytics.tasksOverdue === 1 ? "" : "s"}. Limpia ese ruido antes de abrir un frente nuevo.`;
+  }
+  if (analytics.stalledChapter && openReview) {
+    return `El punto más sensible es ${analytics.stalledChapter.title}. Conviene cerrar revisión y luego empujarlo con una sesión de redacción.`;
+  }
+  if (readingsInFlight > Number(analytics.readingCounts["Leídas"] || 0) && analytics.wordsLast7 < 1200) {
+    return "Ahora mismo estás más en lectura que en redacción. Conviene convertir una fuente abierta en un párrafo útil esta semana.";
+  }
+  if (analytics.wordsDelta > 0) {
+    return "El ritmo mejora respecto a la semana previa. Mantén una sesión de escritura y otra de revisión para consolidarlo.";
+  }
+  return "El trabajo avanza, pero conviene concentrar la semana en un solo capítulo y un solo frente de revisión.";
+}
+
+function buildWritingTrendText(wordsLast7, wordsPrevious7) {
+  if (!wordsLast7 && !wordsPrevious7) return "Sin escritura reciente";
+  if (!wordsPrevious7 && wordsLast7) return "Arranque frente a la semana previa";
+  if (wordsLast7 === wordsPrevious7) return "Ritmo igual que la semana previa";
+  const diff = Math.abs(wordsLast7 - wordsPrevious7);
+  return wordsLast7 > wordsPrevious7
+    ? `+${formatNumber(diff)} frente a la semana previa`
+    : `-${formatNumber(diff)} frente a la semana previa`;
+}
+
+function countConsecutiveWritingWeeks() {
+  const series = buildWritingWeekSeries(8);
+  let streak = 0;
+  for (let index = series.length - 1; index >= 0; index -= 1) {
+    if (!series[index].value) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+function findMostStalledChapter() {
+  return [...state.chapters]
+    .filter((chapter) => normalizeUserText(chapter.status) !== "aprobado")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")) || Number(a.progress || 0) - Number(b.progress || 0))[0] || null;
+}
+
+function reviewStatusCounts() {
+  const counts = { Pendientes: 0, "En proceso": 0, Resueltos: 0 };
+  state.reviewComments.forEach((comment) => {
+    counts[normalizeReviewStatus(comment.status)] += 1;
+  });
+  return counts;
+}
+
+function readingStatusCounts() {
+  const counts = { Pendientes: 0, Leyendo: 0, "Leídas": 0, Clave: 0 };
+  state.readings.forEach((reading) => {
+    counts[normalizeReadingStatus(reading.status)] += 1;
+  });
+  return counts;
+}
+
+function normalizeReviewStatus(status) {
+  const normalized = normalizeUserText(status);
+  if (normalized.includes("resuelto")) return "Resueltos";
+  if (normalized.includes("proceso") || normalized.includes("curso") || normalized.includes("revision")) return "En proceso";
+  return "Pendientes";
+}
+
+function normalizeReadingStatus(status) {
+  const normalized = normalizeUserText(status);
+  if (normalized.includes("clave")) return "Clave";
+  if (normalized.includes("leyendo")) return "Leyendo";
+  if (normalized.includes("leido")) return "Leídas";
+  return "Pendientes";
+}
+
+function writingWordsOnDate(date) {
+  return state.writingLog
+    .filter((entry) => entry.date === date)
+    .reduce((sum, entry) => sum + Number(entry.words || 0), 0);
+}
+
+function writingWordsBetweenDays(startOffset, endOffset) {
+  const end = addDays(startOfLocalDay(new Date()), -startOffset);
+  const start = addDays(startOfLocalDay(new Date()), -endOffset);
+  return writingWordsBetweenDates(start, end);
+}
+
+function writingWordsBetweenDates(start, end) {
+  const startIso = toLocalISODate(start);
+  const endIso = toLocalISODate(end);
+  return state.writingLog
+    .filter((entry) => entry.date >= startIso && entry.date <= endIso)
+    .reduce((sum, entry) => sum + Number(entry.words || 0), 0);
+}
+
+function startOfLocalDay(date) {
+  const clone = new Date(date);
+  clone.setHours(0, 0, 0, 0);
+  return clone;
+}
+
+function startOfLocalWeek(date) {
+  const clone = startOfLocalDay(date);
+  const day = (clone.getDay() + 6) % 7;
+  clone.setDate(clone.getDate() - day);
+  return clone;
+}
+
+function addDays(date, amount) {
+  const clone = new Date(date);
+  clone.setDate(clone.getDate() + amount);
+  return clone;
+}
+
+function toLocalISODate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatChartDayLabel(date) {
+  return new Intl.DateTimeFormat("es-ES", { weekday: "short", day: "2-digit" }).format(date).replace(".", "");
+}
+
+function formatChartWeekLabel(start, end) {
+  const startLabel = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit" }).format(start);
+  const endLabel = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit" }).format(end);
+  return `${startLabel}–${endLabel}`;
+}
+
+function compactNumber(value) {
+  return new Intl.NumberFormat("es-ES", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value || 0));
 }
 
 function writingWordsLastDays(days) {

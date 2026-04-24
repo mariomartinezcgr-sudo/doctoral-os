@@ -947,7 +947,8 @@ function buildAssistantContext(state) {
     writing: {
       last7DaysWords: wordsWrittenLastDays(state.writingLog, 7),
       sessionsLast7Days: sessionsLastDays(state.writingLog, 7)
-    }
+    },
+    analytics: buildAssistantAnalytics(state)
   };
 }
 
@@ -1173,6 +1174,81 @@ function dayDistance(date) {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   return Math.round((target - today) / 86400000);
+}
+
+function buildAssistantAnalytics(state) {
+  const wordsLast7Days = wordsWrittenLastDays(state.writingLog, 7);
+  const wordsPrevious7Days = wordsWrittenRange(state.writingLog, 7, 13);
+  const reviewOpen = (Array.isArray(state.reviewComments) ? state.reviewComments : []).filter((comment) => normalizeReviewStatusName(comment.status) !== "Resueltos").length;
+  const tasksOverdue = (Array.isArray(state.tasks) ? state.tasks : []).filter((task) => task.due && task.due < assistantTodayIso() && task.status !== "later").length;
+  const readingsByStatus = readingStatusSummary(state.readings);
+  const stalledChapter = assistantStalledChapter(state.chapters);
+  return {
+    wordsLast7Days,
+    wordsPrevious7Days,
+    writingTrend: buildAssistantWritingTrend(wordsLast7Days, wordsPrevious7Days),
+    reviewOpen,
+    tasksOverdue,
+    activeChapters: (Array.isArray(state.chapters) ? state.chapters : []).filter((chapter) => Number(chapter.progress || 0) > 0).length,
+    readingsByStatus,
+    stalledChapter: stalledChapter ? {
+      title: stalledChapter.title || "",
+      progress: Number(stalledChapter.progress || 0),
+      due: stalledChapter.due || ""
+    } : null
+  };
+}
+
+function wordsWrittenRange(log, startDaysAgo, endDaysAgo) {
+  const now = Date.now();
+  const endCutoff = now - startDaysAgo * 86400000;
+  const startCutoff = now - (endDaysAgo + 1) * 86400000;
+  return (Array.isArray(log) ? log : []).reduce((sum, entry) => {
+    const stamp = new Date(String(entry.date || "") + "T00:00:00").getTime();
+    if (!Number.isFinite(stamp) || stamp < startCutoff || stamp >= endCutoff) return sum;
+    return sum + Number(entry.words || 0);
+  }, 0);
+}
+
+function readingStatusSummary(readings) {
+  const counts = { Pendientes: 0, Leyendo: 0, "Leídas": 0, Clave: 0 };
+  (Array.isArray(readings) ? readings : []).forEach((reading) => {
+    counts[normalizeReadingStatusName(reading.status)] += 1;
+  });
+  return counts;
+}
+
+function normalizeReviewStatusName(status) {
+  const normalized = normalizeChapterTitle(status);
+  if (normalized.includes("resuelto")) return "Resueltos";
+  if (normalized.includes("proceso") || normalized.includes("curso") || normalized.includes("revision")) return "En proceso";
+  return "Pendientes";
+}
+
+function normalizeReadingStatusName(status) {
+  const normalized = normalizeChapterTitle(status);
+  if (normalized.includes("clave")) return "Clave";
+  if (normalized.includes("leyendo")) return "Leyendo";
+  if (normalized.includes("leido")) return "Leídas";
+  return "Pendientes";
+}
+
+function assistantStalledChapter(chapters) {
+  return (Array.isArray(chapters) ? chapters : [])
+    .filter((chapter) => normalizeChapterTitle(chapter.status) !== "aprobado")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")) || Number(a.progress || 0) - Number(b.progress || 0))[0] || null;
+}
+
+function buildAssistantWritingTrend(wordsLast7Days, wordsPrevious7Days) {
+  if (!wordsLast7Days && !wordsPrevious7Days) return "Sin escritura reciente";
+  if (!wordsPrevious7Days && wordsLast7Days) return "Arranque frente a la semana previa";
+  if (wordsLast7Days === wordsPrevious7Days) return "Ritmo igual que la semana previa";
+  const diff = Math.abs(wordsLast7Days - wordsPrevious7Days);
+  return wordsLast7Days > wordsPrevious7Days ? `+${diff} palabras frente a la semana previa` : `-${diff} palabras frente a la semana previa`;
+}
+
+function assistantTodayIso() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function wordsWrittenLastDays(log, days) {
