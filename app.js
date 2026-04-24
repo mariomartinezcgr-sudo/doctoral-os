@@ -27,6 +27,7 @@ const icons = {
   print: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-5h18v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7v-7Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M4 3h16"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   save: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 3h12l2 2v16H5V3Z"/><path d="M8 3v6h8"/><path d="M8 21v-7h8v7"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>',
@@ -49,6 +50,7 @@ const defaultState = {
   activeView: "dashboard",
   editorChapterId: "",
   literatureFilter: "",
+  literatureCitationId: "",
   project: {
     name: "Mi tesis doctoral",
     candidate: "Doctorando/a",
@@ -162,6 +164,7 @@ function ensureStateShape(target) {
   target.writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
   target.forumTopics = Array.isArray(target.forumTopics) ? target.forumTopics : [];
   target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
+  target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
   target.meetings.forEach((meeting) => {
     meeting.time = meeting.time || "";
     if (meeting.type === "Direccion") meeting.type = "Dirección";
@@ -171,9 +174,17 @@ function ensureStateShape(target) {
     if (reading.status === "Leido") reading.status = "Leído";
     if (reading.chapter === "Sin capitulo") reading.chapter = "Sin capítulo";
     if (reading.title === "Lectura sin título") reading.title = "Lectura sin título";
+    reading.type = reading.type || "Artículo";
+    reading.source = reading.source || "";
   });
   target.tasks.forEach((task) => {
     if (task.area === "Revision") task.area = "Revisión";
+    if (task.status === "done") {
+      task.done = true;
+      task.status = "week";
+    }
+    task.done = Boolean(task.done);
+    task.completedAt = task.completedAt || "";
   });
   target.reviewComments.forEach((comment) => {
     if (comment.status === "Necesita aclaracion") comment.status = "Necesita aclaración";
@@ -229,6 +240,7 @@ function createFreshState(user = {}) {
     activeView: "dashboard",
     editorChapterId: "",
     literatureFilter: "",
+    literatureCitationId: "",
     project: {
       name: "Mi tesis doctoral",
       candidate: name,
@@ -988,14 +1000,40 @@ function handleScreenClick(event) {
 
   if (action === "delete-reading") {
     state.readings = state.readings.filter((reading) => reading.id !== id);
+    if (state.literatureCitationId === id) state.literatureCitationId = "";
     saveState("Lectura eliminada");
     render();
   }
 
+  if (action === "show-citation") {
+    state.literatureCitationId = id;
+    saveState("", { skipSync: true });
+    render();
+  }
+
+  if (action === "copy-citation") {
+    const reading = state.readings.find((item) => item.id === id);
+    if (reading) copyTextToClipboard(buildBibliographicReference(reading));
+  }
+
   if (action === "task-status") {
     const task = state.tasks.find((item) => item.id === id);
-    if (task) task.status = target.dataset.value;
+    if (task) {
+      task.status = target.dataset.value;
+      task.done = false;
+      task.completedAt = "";
+    }
     saveState("Tarea actualizada");
+    render();
+  }
+
+  if (action === "toggle-task-done") {
+    const task = state.tasks.find((item) => item.id === id);
+    if (task) {
+      task.done = !task.done;
+      task.completedAt = task.done ? new Date().toISOString() : "";
+    }
+    saveState(task?.done ? "Tarea completada" : "Tarea reabierta");
     render();
   }
 
@@ -1028,7 +1066,9 @@ function handleScreenClick(event) {
         status: "week",
         due: comment.due || "",
         effort: comment.priority === "Alta" ? "90 min" : "45 min",
-        impact: comment.priority === "Alta" ? "Alto" : "Medio"
+        impact: comment.priority === "Alta" ? "Alto" : "Medio",
+        done: false,
+        completedAt: ""
       });
     }
     saveState("Comentario convertido en tarea");
@@ -1130,17 +1170,20 @@ function handleFormSubmit(event) {
   }
 
   if (formType === "reading") {
-    state.readings.push({
+    const reading = {
       id: createId("rd"),
       title: data.title || "Lectura sin título",
       authors: data.authors || "Autor pendiente",
       year: data.year || "",
       type: data.type || "Artículo",
+      source: data.source || "",
       status: data.status || "Pendiente",
       chapter: data.chapter || "Sin capítulo",
       use: data.use || "",
       doi: data.doi || ""
-    });
+    };
+    state.readings.push(reading);
+    state.literatureCitationId = reading.id;
     saveState("Lectura añadida");
     form.reset();
     render();
@@ -1154,7 +1197,9 @@ function handleFormSubmit(event) {
       status: data.status || "week",
       due: data.due || "",
       effort: data.effort || "30 min",
-      impact: data.impact || "Medio"
+      impact: data.impact || "Medio",
+      done: false,
+      completedAt: ""
     });
     saveState("Tarea creada");
     form.reset();
@@ -1359,7 +1404,7 @@ function renderAuthGate() {
 function renderDashboard() {
   const totalWords = state.chapters.reduce((sum, chapter) => sum + Number(chapter.words || 0), 0);
   const targetWords = Number(state.project.writingTarget || 0);
-  const nextTask = [...state.tasks].sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
+  const nextTask = [...state.tasks].filter((task) => !task.done).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
   const readingLinked = state.readings.filter((item) => item.chapter && item.chapter !== "Sin capítulo").length;
   const pendingComments = state.reviewComments.filter((item) => item.status !== "Resuelto").length;
   const wordsThisWeek = writingWordsLastDays(7);
@@ -1481,7 +1526,7 @@ function renderDashboard() {
     <section class="metrics-grid" aria-label="Indicadores principales">
       ${metric("Palabras", `${formatNumber(totalWords)}`, `${Math.round((totalWords / targetWords) * 100) || 0}% del objetivo`)}
       ${metric("Capítulos", state.chapters.length, "estructurados en el editor")}
-      ${metric("Plan", state.tasks.filter((task) => task.status !== "later").length, "tareas activas")}
+      ${metric("Plan", state.tasks.filter((task) => task.status !== "later" && !task.done).length, "tareas activas")}
       ${metric("Comentarios", pendingComments, "pendientes de respuesta")}
       ${metric("Semana", formatNumber(wordsThisWeek), "palabras registradas")}
       ${metric("Lecturas", `${readingLinked}/${state.readings.length}`, "vinculadas a capítulos")}
@@ -1717,12 +1762,76 @@ function newChapterPanel() {
   `;
 }
 
+function formatReferenceAuthors(value) {
+  const raw = String(value || "")
+    .split(/;| y | and /i)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!raw.length) return "Autor pendiente";
+  if (raw.length === 1) return raw[0];
+  if (raw.length === 2) return `${raw[0]} & ${raw[1]}`;
+  return `${raw.slice(0, -1).join(", ")} & ${raw[raw.length - 1]}`;
+}
+
+function ensureReferencePeriod(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+function normalizeReferenceLocator(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^doi\.org\//i.test(text)) return `https://${text}`;
+  if (/^10\./i.test(text)) return `https://doi.org/${text}`;
+  return text;
+}
+
+function buildBibliographicReference(reading) {
+  const authors = formatReferenceAuthors(reading?.authors);
+  const year = String(reading?.year || "").trim() || "s. f.";
+  const title = ensureReferencePeriod(reading?.title || "Título pendiente");
+  const sourceBase = String(reading?.source || reading?.type || "").trim();
+  const source = sourceBase ? ensureReferencePeriod(sourceBase) : "";
+  const locator = normalizeReferenceLocator(reading?.doi);
+  return [authors, `(${year}).`, title, source, locator].filter(Boolean).join(" ");
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast("Referencia copiada");
+      return;
+    }
+  } catch (error) {
+    // Fallback below.
+  }
+  copyWithFallback(text);
+}
+
+function copyWithFallback(text) {
+  const helper = document.createElement("textarea");
+  helper.value = text;
+  helper.setAttribute("readonly", "");
+  helper.style.position = "absolute";
+  helper.style.left = "-9999px";
+  document.body.appendChild(helper);
+  helper.select();
+  document.execCommand("copy");
+  helper.remove();
+  showToast("Referencia copiada");
+}
+
 function renderLiterature() {
   const term = (state.literatureFilter || "").trim().toLowerCase();
   const filtered = state.readings.filter((reading) => {
-    const haystack = `${reading.title} ${reading.authors} ${reading.chapter} ${reading.status} ${reading.use}`.toLowerCase();
+    const haystack = `${reading.title} ${reading.authors} ${reading.chapter} ${reading.status} ${reading.use} ${reading.source || ""}`.toLowerCase();
     return !term || haystack.includes(term);
   });
+  const selectedReading = state.readings.find((reading) => reading.id === state.literatureCitationId) || filtered[0] || state.readings[0] || null;
+  const citation = selectedReading ? buildBibliographicReference(selectedReading) : "";
 
   screen.innerHTML = `
     <section class="literature-layout">
@@ -1731,12 +1840,12 @@ function renderLiterature() {
           <div>
             <p class="eyebrow">Lecturas mínimas</p>
             <h2>Fuentes vinculadas a capítulos</h2>
-            <p>En la v1, las lecturas sirven para sostener capítulos concretos y mantener clara su utilidad en la tesis.</p>
+            <p>En la v1, las lecturas sirven para sostener capítulos concretos, tener claro para qué se usan y sacar una referencia rápida lista para copiar.</p>
           </div>
         </div>
 
         <div class="filter-row">
-          <input data-literature-filter type="search" value="${escapeAttribute(state.literatureFilter || "")}" placeholder="Buscar por autor, capítulo o estado">
+          <input data-literature-filter type="search" value="${escapeAttribute(state.literatureFilter || "")}" placeholder="Buscar por autor, capítulo, fuente o estado">
         </div>
 
         <div class="table-wrap">
@@ -1745,21 +1854,26 @@ function renderLiterature() {
               <tr>
                 <th>Autor</th>
                 <th>Año</th>
-                <th>Tema</th>
+                <th>Fuente</th>
                 <th>Uso en tesis</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               ${filtered.map((reading) => `
-                <tr>
+                <tr class="${selectedReading?.id === reading.id ? "reading-row reading-row--active" : "reading-row"}">
                   <td><strong>${escapeHtml(reading.authors)}</strong><br>${escapeHtml(reading.title)}</td>
                   <td>${escapeHtml(reading.year)}</td>
-                  <td>${escapeHtml(reading.chapter)}<br>${statusPill(reading.status)}</td>
+                  <td>${escapeHtml(reading.source || reading.chapter)}<br>${statusPill(reading.status)}</td>
                   <td>${escapeHtml(reading.use)}</td>
-                  <td><button class="tiny-button" data-action="delete-reading" data-id="${reading.id}" type="button"><span data-icon="trash"></span></button></td>
+                  <td>
+                    <div class="row-actions">
+                      <button class="tiny-button" data-action="show-citation" data-id="${reading.id}" type="button">Referencia</button>
+                      <button class="tiny-button" data-action="delete-reading" data-id="${reading.id}" type="button"><span data-icon="trash"></span></button>
+                    </div>
+                  </td>
                 </tr>
-              `).join("")}
+              `).join("") || `<tr><td colspan="5">${emptyState("Todavía no hay lecturas registradas.")}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1772,40 +1886,63 @@ function renderLiterature() {
             ${field("Título", "title", "input", "Artículo o libro")}
             ${field("Autores", "authors", "input", "Apellido, A.")}
             ${field("Año", "year", "number", "2026")}
+            ${field("Revista, editorial o fuente", "source", "input", "Revista, editorial, congreso...")}
             <div class="inline-fields">
               ${selectField("Estado", "status", ["Pendiente", "Leyendo", "Leído", "Clave", "Descartado"])}
               ${chapterSelect("Capítulo", "chapter")}
             </div>
             ${field("Uso en mi tesis", "use", "textarea", "Dónde lo citaré y para qué")}
-            ${field("DOI / URL", "doi", "input", "10.xxxx/...")}
+            ${field("DOI / URL", "doi", "input", "10.xxxx/... o URL")}
             <button class="button" type="submit"><span data-icon="plus"></span>Añadir lectura</button>
           </form>
         </div>
+
+        <article class="card citation-card">
+          <div class="section-header compact-head">
+            <div>
+              <p class="card-kicker">Referencia rápida</p>
+              <h2>${selectedReading ? escapeHtml(selectedReading.title) : "Selecciona una lectura"}</h2>
+            </div>
+            ${selectedReading ? `<button class="tiny-button" data-action="copy-citation" data-id="${selectedReading.id}" type="button"><span data-icon="copy"></span>Copiar</button>` : ""}
+          </div>
+          <p class="muted">Formato académico base listo para copiar y pegar en tus notas o bibliografía provisional.</p>
+          <div class="generated-box citation-preview">${selectedReading ? escapeHtml(citation) : "Selecciona una lectura de la tabla o crea una nueva para generar aquí una referencia rápida."}</div>
+        </article>
       </aside>
     </section>
   `;
   hydrateIcons(screen);
 }
-
 function renderPlanner() {
   const columns = [
     { id: "today", title: "Hoy" },
     { id: "week", title: "Esta semana" },
     { id: "later", title: "Después" }
   ];
+  const activeTasks = state.tasks.filter((task) => !task.done);
+  const completedTasks = [...state.tasks]
+    .filter((task) => task.done)
+    .sort((a, b) => String(b.completedAt || "").localeCompare(String(a.completedAt || "")));
+  const completionRate = state.tasks.length ? Math.round((completedTasks.length / state.tasks.length) * 100) : 0;
 
   screen.innerHTML = `
     <section class="section-header">
       <div>
         <p class="eyebrow">Trabajo sostenible</p>
         <h2>Plan semanal</h2>
-        <p>Convierte capítulos, lecturas y reuniones en tareas pequeñas con vencimiento e impacto claro.</p>
+        <p>Convierte capítulos, lecturas y reuniones en tareas pequeñas con vencimiento e impacto claro. Marca lo completado a medida que avanzas y deja una semana más legible.</p>
       </div>
     </section>
 
-    <section class="kanban">
+    <section class="metrics-grid compact-metrics planner-metrics">
+      ${metric("Activas", activeTasks.length, "tareas todavía abiertas")}
+      ${metric("Completadas", completedTasks.length, "cerradas esta semana o antes")}
+      ${metric("Progreso", `${completionRate}%`, "del total de tareas registradas")}
+    </section>
+
+    <section class="kanban planner-kanban">
       ${columns.map((column) => {
-        const tasks = state.tasks.filter((task) => task.status === column.id);
+        const tasks = state.tasks.filter((task) => task.status === column.id && !task.done);
         return `
           <div class="kanban-column">
             <h3>${column.title}<span class="badge">${tasks.length}</span></h3>
@@ -1815,13 +1952,13 @@ function renderPlanner() {
       }).join("")}
     </section>
 
-    <section class="grid-2" style="margin-top: 18px;">
+    <section class="grid-2 planner-bottom-grid" style="margin-top: 18px;">
       <article class="form-panel">
         <h2>Nueva tarea</h2>
         <form class="form-grid" data-form="task">
           ${field("Tarea", "title", "input", "Escribir 500 palabras del marco teórico")}
           <div class="inline-fields">
-            ${field("Area", "area", "input", "Capítulos")}
+            ${field("Área", "area", "input", "Capítulos")}
             ${selectField("Columna", "status", ["today", "week", "later"])}
           </div>
           <div class="inline-fields">
@@ -1832,15 +1969,32 @@ function renderPlanner() {
           <button class="button" type="submit"><span data-icon="plus"></span>Añadir tarea</button>
         </form>
       </article>
-      <article class="card">
-        <p class="card-kicker">Guia semanal</p>
-        <h2>Una tesis avanza por entregables pequeños</h2>
-        <p>Elige pocas tareas, asigna fecha y mueve lo que no quepa a "Después".</p>
+      <article class="card planner-guide-card">
+        <p class="card-kicker">Checklist semanal</p>
+        <h2>Una tesis avanza cuando lo terminado desaparece del ruido</h2>
+        <p>Marca cada tarea al cerrarla. Si necesitas retomarla, vuelve a abrirla o muévela de columna sin perder el historial.</p>
+        <ul class="quality-list compact-list">
+          <li>Hoy: tareas pequeñas y cerrables</li>
+          <li>Semana: lo importante que sí cabe</li>
+          <li>Después: lo que todavía no debe robar foco</li>
+        </ul>
       </article>
+    </section>
+
+    <section class="panel completed-panel" style="margin-top: 18px;">
+      <div class="section-header compact-head">
+        <div>
+          <p class="card-kicker">Completadas</p>
+          <h2>Tareas ya cerradas</h2>
+        </div>
+        <span class="badge teal">${completedTasks.length}</span>
+      </div>
+      <div class="completed-task-list">
+        ${completedTasks.map((task) => completedTaskRow(task)).join("") || emptyState("Todavía no has marcado tareas como completadas.")}
+      </div>
     </section>
   `;
 }
-
 function renderReviews() {
   const columns = ["Pendiente", "En proceso", "Necesita aclaración", "Resuelto"];
   const open = state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
@@ -2303,7 +2457,7 @@ function isPerformanceAdviceRequest(normalized) {
 
 function buildProgressSummary() {
   const analytics = buildAnalyticsSnapshot();
-  const openTasks = state.tasks.filter((task) => task.status !== "later").length;
+  const openTasks = state.tasks.filter((task) => task.status !== "later" && !task.done).length;
   const pendingComments = Number(analytics.reviewCounts.Pendientes || 0) + Number(analytics.reviewCounts["En proceso"] || 0);
   const nextMeeting = upcomingMeeting();
   const lines = [
@@ -2321,7 +2475,7 @@ function buildWeeklyPriorities() {
   const lines = [];
   const urgentComment = findUrgentComment();
   const urgentTask = [...state.tasks]
-    .filter((task) => task.status !== "later")
+    .filter((task) => task.status !== "later" && !task.done)
     .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
   const chapter = nextChapterToPush();
   if (!analytics.wordsLast7) {
@@ -2436,7 +2590,9 @@ function createTaskFromPrompt(message) {
     status,
     due,
     effort,
-    impact
+    impact,
+    done: false,
+    completedAt: ""
   });
   return {
     reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Después"}.`,
@@ -2505,7 +2661,7 @@ function recommendNextMove() {
   const urgentComment = findUrgentComment();
   if (urgentComment) return `cerrar el comentario abierto de ${urgentComment.chapter}`;
   const urgentTask = [...state.tasks]
-    .filter((task) => task.status !== "later")
+    .filter((task) => task.status !== "later" && !task.done)
     .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
   if (urgentTask) return `terminar la tarea ${urgentTask.title}`;
   const chapter = nextChapterToPush();
@@ -2715,9 +2871,15 @@ function taskCard(task) {
   ].filter((item) => item.id !== task.status);
 
   return `
-    <article class="task-card">
+    <article class="task-card ${task.done ? "task-card--done" : ""}">
       <div class="task-top">
-        <strong>${escapeHtml(task.title)}</strong>
+        <div class="task-main">
+          <label class="task-check" aria-label="Marcar tarea como completada">
+            <input ${task.done ? "checked" : ""} data-action="toggle-task-done" data-id="${task.id}" type="checkbox">
+            <span class="task-check-mark" aria-hidden="true"></span>
+          </label>
+          <strong class="task-title">${escapeHtml(task.title)}</strong>
+        </div>
         <button class="tiny-button" data-action="delete-task" data-id="${task.id}" type="button"><span data-icon="trash"></span></button>
       </div>
       <div class="task-meta">
@@ -2726,6 +2888,7 @@ function taskCard(task) {
         <span>${escapeHtml(task.effort)}</span>
         <span>${escapeHtml(task.impact)}</span>
       </div>
+      ${task.done ? `<div class="task-completion-note">Completada ${formatDate(task.completedAt)}</div>` : ""}
       <div class="row-actions">
         ${nextStatuses.map((status) => `<button class="tiny-button" data-action="task-status" data-id="${task.id}" data-value="${status.id}" type="button">${status.label}</button>`).join("")}
       </div>
@@ -2733,6 +2896,21 @@ function taskCard(task) {
   `;
 }
 
+function completedTaskRow(task) {
+  return `
+    <article class="completed-task-row">
+      <div>
+        <strong>${escapeHtml(task.title)}</strong>
+        <div class="task-meta">
+          <span>${escapeHtml(task.area)}</span>
+          <span>${formatDate(task.completedAt || task.due)}</span>
+          <span>${escapeHtml(task.effort)}</span>
+        </div>
+      </div>
+      <button class="tiny-button" data-action="toggle-task-done" data-id="${task.id}" type="button">Reabrir</button>
+    </article>
+  `;
+}
 function reviewCard(comment, statuses) {
   const nextStatuses = statuses.filter((status) => status !== comment.status);
   return `
@@ -2878,7 +3056,7 @@ function buildAnalyticsSnapshot() {
     readingCounts,
     activeChapters,
     chaptersUpdatedThisWeek,
-    tasksOverdue: state.tasks.filter((task) => task.due && task.due < todayISO() && task.status !== "later").length,
+    tasksOverdue: state.tasks.filter((task) => task.due && task.due < todayISO() && task.status !== "later" && !task.done).length,
     chapters: [...state.chapters]
       .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")) || Number(a.progress || 0) - Number(b.progress || 0))
       .slice(0, 6)
@@ -3217,7 +3395,7 @@ function average(values) {
 
 function nextDueLabel() {
   const candidates = [
-    ...state.tasks.map((task) => ({ label: task.title, due: task.due })),
+    ...state.tasks.filter((task) => !task.done).map((task) => ({ label: task.title, due: task.due })),
     ...state.chapters.map((chapter) => ({ label: chapter.title, due: chapter.due })),
     ...state.meetings.map((meeting) => ({ label: "Reunión", due: meeting.next })),
     ...state.reviewComments.map((comment) => ({ label: comment.chapter, due: comment.due }))
