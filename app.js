@@ -527,11 +527,11 @@ function updateAuthUI() {
     return;
   }
 
-  syncStatus.textContent = demoMode ? "Demo guiada" : auth.status === "offline" ? "Backend offline" : "Local";
+  syncStatus.textContent = demoMode ? "Demo guiada" : auth.status === "offline" ? "Backend offline" : "Acceso privado";
   syncStatus.title = demoMode
     ? "Estás recorriendo una tesis de ejemplo. Crea cuenta para empezar la tuya."
-    : "Inicia sesión para sincronizar entre dispositivos.";
-  authLabel.textContent = demoMode ? "Crear cuenta" : "Cuenta";
+    : "Inicia sesión para entrar en tu espacio privado de tesis.";
+  authLabel.textContent = demoMode ? "Crear cuenta" : "Entrar";
   logoutButton.hidden = true;
 }
 
@@ -735,6 +735,10 @@ function shortTime() {
 function handleNavigation(event) {
   const button = event.target.closest("[data-view]");
   if (!button) return;
+  if (requiresAuthenticationWall()) {
+    openAuthModal("login");
+    return;
+  }
   state.activeView = button.dataset.view;
   saveState("");
   render();
@@ -758,9 +762,18 @@ function handleScreenClick(event) {
   const id = target.dataset.id;
 
   if (action === "go") {
+    if (requiresAuthenticationWall()) {
+      openAuthModal("login");
+      return;
+    }
     state.activeView = target.dataset.view;
     saveState("");
     render();
+    return;
+  }
+
+  if (action === "auth-launch") {
+    openAuthModal(target.dataset.intent === "register" ? "register" : "login");
     return;
   }
 
@@ -1111,6 +1124,19 @@ function render() {
   if (!V1_VIEWS.includes(state.activeView)) {
     state.activeView = "dashboard";
   }
+
+  if (requiresAuthenticationWall()) {
+    document.querySelectorAll("[data-view]").forEach((button) => {
+      button.classList.remove("is-active");
+    });
+    viewTitle.textContent = "Acceso privado";
+    updateSidebar();
+    renderAuthGate();
+    hydrateIcons(screen);
+    screen.focus({ preventScroll: true });
+    return;
+  }
+
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === state.activeView);
   });
@@ -1134,8 +1160,45 @@ function render() {
 }
 
 function updateSidebar() {
+  if (requiresAuthenticationWall()) {
+    sidebarProgress.textContent = "--";
+    sidebarDue.textContent = "Inicia sesión";
+    return;
+  }
   sidebarProgress.textContent = `${overallProgress()}%`;
   sidebarDue.textContent = nextDueLabel();
+}
+
+function requiresAuthenticationWall() {
+  return API_ENABLED && !demoMode && !auth.user;
+}
+
+function renderAuthGate() {
+  screen.innerHTML = `
+    <section class="hero-panel auth-gate-layout">
+      <div class="panel project-summary">
+        <div>
+          <p class="eyebrow">Acceso privado</p>
+          <h2>Tu espacio de tesis solo se abre con cuenta</h2>
+          <p>DoctoralOS guarda capítulos, tareas, reuniones y comentarios dentro de una cuenta personal. Así evitamos mostrar el panel de trabajo a cualquiera que entre en la URL de la app.</p>
+          <div class="summary-actions">
+            <button class="button" data-action="auth-launch" data-intent="login" type="button"><span data-icon="assistant"></span>Iniciar sesión</button>
+            <button class="ghost-button" data-action="auth-launch" data-intent="register" type="button"><span data-icon="plus"></span>Crear cuenta</button>
+          </div>
+        </div>
+        <article class="card auth-gate-card">
+          <p class="card-kicker">Qué desbloqueas al entrar</p>
+          <h2>Un panel privado y sincronizado</h2>
+          <ul class="quality-list compact-list">
+            <li>Capítulos con editor, checklist y notas</li>
+            <li>Plan semanal y revisión en un solo sitio</li>
+            <li>Sesiones de escritura y respaldo exportable</li>
+            <li>Asistente y foro listos para crecer contigo</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  `;
 }
 
 function renderDashboard() {
