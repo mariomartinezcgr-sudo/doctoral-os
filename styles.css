@@ -2012,3 +2012,37 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 }
+
+
+.auth-gate-layout {
+  min-height: calc(100vh - 190px);
+  align-items: center;
+}
+
+.auth-gate-panel {
+  gap: 24px;
+}
+
+.auth-gate-actions {
+  margin-bottom: 14px;
+}
+
+.auth-gate-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.auth-gate-card {
+  align-self: stretch;
+}
+
+.auth-gate-card ul {
+  margin: 0;
+}
+
+@media (max-width: 860px) {
+  .auth-gate-links {
+    grid-template-columns: 1fr;
+  }
+}
