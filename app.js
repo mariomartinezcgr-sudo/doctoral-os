@@ -22,7 +22,7 @@ const icons = {
   meeting: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M2 21a5 5 0 0 1 10 0"/><path d="M14 21a4 4 0 0 1 8 0"/></svg>',
   review: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 4h11l3 3v13H5V4Z"/><path d="M16 4v4h4"/><path d="M8 12h8"/><path d="M8 16h5"/><path d="m14 19 2 2 4-5"/></svg>',
   writing: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 20h16"/><path d="M6 16 17.5 4.5a2.1 2.1 0 0 1 3 3L9 19l-4 1 1-4Z"/></svg>',
-  assistant: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 18h4l4 3v-3h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>',
+  assistant: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v3"/><path d="M9 6h6"/><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M9 18v2"/><path d="M15 18v2"/><path d="M3 11v3"/><path d="M21 11v3"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="12" r="1"/><path d="M9 15h6"/></svg>',
   forum: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4V6Z"/><path d="M8 9h8"/><path d="M8 13h6"/></svg>',
   print: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-5h18v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7v-7Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>',
