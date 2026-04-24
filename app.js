@@ -1,6 +1,5 @@
 const STORAGE_KEY = "doctoral-os-state-v1";
 const DEMO_STORAGE_KEY = "doctoral-os-demo-state-v1";
-const TOKEN_KEY = "doctoral-os-token-v1";
 const DEMO_QUERY_PARAM = "demo";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
 const DEFAULT_CHECKLIST_ITEMS = [
@@ -13,7 +12,7 @@ const DEFAULT_CHECKLIST_ITEMS = [
   "Conclusión responde al objetivo",
   "Pendientes convertidos en tareas"
 ];
-const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing", "assistant"];
+const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing", "forum", "assistant"];
 
 const icons = {
   dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 13h6V4H4v9Z"/><path d="M14 20h6V4h-6v16Z"/><path d="M4 20h6v-3H4v3Z"/></svg>',
@@ -24,6 +23,7 @@ const icons = {
   review: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 4h11l3 3v13H5V4Z"/><path d="M16 4v4h4"/><path d="M8 12h8"/><path d="M8 16h5"/><path d="m14 19 2 2 4-5"/></svg>',
   writing: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 20h16"/><path d="M6 16 17.5 4.5a2.1 2.1 0 0 1 3 3L9 19l-4 1 1-4Z"/></svg>',
   assistant: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 18h4l4 3v-3h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>',
+  forum: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4V6Z"/><path d="M8 9h8"/><path d="M8 13h6"/></svg>',
   print: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-5h18v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7v-7Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M4 3h16"/></svg>',
@@ -41,6 +41,7 @@ const viewTitles = {
   planner: "Plan semanal",
   reviews: "Reuniones y revisión",
   writing: "Escritura",
+  forum: "Foro",
   assistant: "Asistente",
 };
 
@@ -53,7 +54,7 @@ const defaultState = {
     candidate: "Doctorando/a",
     program: "",
     university: "",
-    mode: "Monografica",
+    mode: "Monográfica",
     phase: "Organizando el trabajo",
     writingTarget: 65000,
     question: "",
@@ -66,16 +67,17 @@ const defaultState = {
   meetings: [],
   reviewComments: [],
   writingLog: [],
+  forumTopics: [],
   assistantThread: []
 };
 
 let demoMode = isDemoRequested();
 let state = loadState();
 let auth = {
-  token: localStorage.getItem(TOKEN_KEY) || "",
   user: null,
-  status: API_ENABLED ? "local" : "file",
-  lastSync: ""
+  status: API_ENABLED ? "checking" : "file",
+  lastSync: "",
+  statusLabel: API_ENABLED ? "Comprobando" : "Archivo local"
 };
 let syncTimer = null;
 let assistantBusy = false;
@@ -94,6 +96,11 @@ const authModal = document.querySelector("#authModal");
 init();
 
 function init() {
+  try {
+    localStorage.removeItem("doctoral-os-token-v1");
+  } catch (error) {
+    console.warn("No se pudo limpiar la sesión heredada", error);
+  }
   hydrateIcons();
   document.querySelector("#mainNav").addEventListener("click", handleNavigation);
   document.querySelector(".topbar-actions").addEventListener("click", handleTopbarAction);
@@ -147,12 +154,44 @@ function ensureStateShape(target) {
   target.meetings = Array.isArray(target.meetings) ? target.meetings : [];
   target.reviewComments = Array.isArray(target.reviewComments) ? target.reviewComments : [];
   target.writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
+  target.forumTopics = Array.isArray(target.forumTopics) ? target.forumTopics : [];
   target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
   target.meetings.forEach((meeting) => {
     meeting.time = meeting.time || "";
+    if (meeting.type === "Direccion") meeting.type = "Dirección";
+    if (meeting.type === "Revision interna") meeting.type = "Revisión interna";
   });
+  target.readings.forEach((reading) => {
+    if (reading.status === "Leido") reading.status = "Leído";
+    if (reading.chapter === "Sin capitulo") reading.chapter = "Sin capítulo";
+    if (reading.title === "Lectura sin título") reading.title = "Lectura sin título";
+  });
+  target.tasks.forEach((task) => {
+    if (task.area === "Revision") task.area = "Revisión";
+  });
+  target.reviewComments.forEach((comment) => {
+    if (comment.status === "Necesita aclaracion") comment.status = "Necesita aclaración";
+    if (comment.source === "Direccion") comment.source = "Dirección";
+    if (comment.chapter === "Sin capitulo") comment.chapter = "Sin capítulo";
+  });
+  target.writingLog.forEach((entry) => {
+    if (entry.chapter === "Sin capitulo") entry.chapter = "Sin capítulo";
+    if (entry.mood === "Revision") entry.mood = "Revisión";
+  });
+  target.forumTopics = target.forumTopics.map((topic) => ({
+    ...topic,
+    id: topic.id || createId("ft"),
+    title: topic.title || "Tema sin título",
+    tag: topic.tag || "Duda",
+    body: topic.body || "",
+    author: topic.author || (demoMode ? "Comunidad" : "Borrador"),
+    createdAt: topic.createdAt || new Date().toISOString()
+  }));
   if (!target.assistantThread.length) {
     target.assistantThread = createInitialAssistantThread();
+  }
+  if (!target.forumTopics.length && demoMode) {
+    target.forumTopics = createDemoForumTopics();
   }
   delete target.phases;
   delete target.risks;
@@ -162,18 +201,16 @@ function ensureStateShape(target) {
   if (target.project) {
     delete target.project.defenseDate;
     delete target.project.ethics;
+    if (target.project.mode === "Monografica") target.project.mode = "Monográfica";
+    if (target.project.phase === "Escritura y revision") target.project.phase = "Escritura y revisión";
   }
-
   target.chapters.forEach((chapter) => normalizeChapter(chapter));
-
   if (!target.editorChapterId || !target.chapters.some((chapter) => chapter.id === target.editorChapterId)) {
     target.editorChapterId = target.chapters[0]?.id || "";
   }
-
   if (!V1_VIEWS.includes(target.activeView)) {
     target.activeView = "dashboard";
   }
-
   return target;
 }
 
@@ -188,7 +225,7 @@ function createFreshState(user = {}) {
       candidate: name,
       program: "",
       university: "",
-      mode: "Monografica",
+      mode: "Monográfica",
       phase: "Organizando el trabajo",
       writingTarget: 65000,
       question: "",
@@ -201,6 +238,7 @@ function createFreshState(user = {}) {
     meetings: [],
     reviewComments: [],
     writingLog: [],
+    forumTopics: [],
     assistantThread: createInitialAssistantThread()
   });
 }
@@ -209,66 +247,66 @@ function createDemoState() {
   const currentYear = new Date().getFullYear();
   const chapter1 = normalizeChapter({
     id: createId("ch"),
-    title: "Introduccion y problema de investigacion",
+    title: "Introducción y problema de investigación",
     goal: "Situar el problema, justificar su relevancia y abrir la pregunta doctoral.",
-    argument: "La continuidad semanal condiciona mas el avance doctoral que la mera acumulacion de lecturas.",
-    status: "En revision",
+    argument: "La continuidad semanal condiciona más el avance doctoral que la mera acumulación de lecturas.",
+    status: "En revisión",
     progress: 78,
     words: 6900,
     target: 8500,
     due: demoDateOffset(12),
-    tasks: ["Reforzar el cierre del apartado 1.3", "Ajustar la transicion hacia la pregunta doctoral"],
+    tasks: ["Reforzar el cierre del apartado 1.3", "Ajustar la transición hacia la pregunta doctoral"],
     sections: [
-      { id: createId("sec"), title: "1. Contexto del problema", goal: "Mostrar por que el tema importa", status: "Cerrada", words: 2100, content: "Las trayectorias doctorales muestran interrupciones frecuentes cuando el trabajo semanal no esta claramente definido." },
-      { id: createId("sec"), title: "2. Pregunta y objetivos", goal: "Definir la pregunta doctoral", status: "En revision", words: 2500, content: "La pregunta central conecta continuidad de trabajo, seguimiento y cierre de revision." },
-      { id: createId("sec"), title: "3. Aporte esperado", goal: "Presentar la contribucion", status: "Borrador", words: 2300, content: "El capitulo plantea un modelo de coordinacion doctoral centrado en continuidad semanal." }
+      { id: createId("sec"), title: "1. Contexto del problema", goal: "Mostrar por qué el tema importa", status: "Cerrada", words: 2100, content: "Las trayectorias doctorales muestran interrupciones frecuentes cuando el trabajo semanal no está claramente definido." },
+      { id: createId("sec"), title: "2. Pregunta y objetivos", goal: "Definir la pregunta doctoral", status: "En revisión", words: 2500, content: "La pregunta central conecta continuidad de trabajo, seguimiento y cierre de revisión." },
+      { id: createId("sec"), title: "3. Aporte esperado", goal: "Presentar la contribución", status: "Borrador", words: 2300, content: "El capítulo plantea un modelo de coordinación doctoral centrado en continuidad semanal." }
     ],
     notes: [
-      { id: createId("nt"), title: "Abrir con dato de abandono", type: "Idea", date: demoDateOffset(-3), text: "Valorar si el primer parrafo debe abrir con un dato sobre abandono o con una escena de trabajo doctoral fragmentado." }
+      { id: createId("nt"), title: "Abrir con dato de abandono", type: "Idea", date: demoDateOffset(-3), text: "Valorar si el primer párrafo debe abrir con un dato sobre abandono o con una escena de trabajo doctoral fragmentado." }
     ],
     checklist: createDefaultChecklist(78)
   });
 
   const chapter2 = normalizeChapter({
     id: createId("ch"),
-    title: "Marco teorico y modelo de continuidad",
-    goal: "Unir literatura sobre autorregulacion, escritura y seguimiento doctoral.",
+    title: "Marco teórico y modelo de continuidad",
+    goal: "Unir literatura sobre autorregulación, escritura y seguimiento doctoral.",
     argument: "El trabajo doctoral mejora cuando el seguimiento semanal convierte feedback y escritura en ciclos cerrables.",
     status: "Borrador",
     progress: 62,
     words: 9100,
     target: 12000,
     due: demoDateOffset(24),
-    tasks: ["Cerrar mapa conceptual final", "Reducir duplicacion entre secciones 2.2 y 2.3"],
+    tasks: ["Cerrar mapa conceptual final", "Reducir duplicación entre secciones 2.2 y 2.3"],
     sections: [
-      { id: createId("sec"), title: "1. Autorregulacion doctoral", goal: "Revisar literatura base", status: "En revision", words: 3000, content: "La autorregulacion aparece como capacidad de mantener objetivos visibles y trabajo recurrente." },
-      { id: createId("sec"), title: "2. Sistemas de seguimiento", goal: "Conectar herramientas y continuidad", status: "Borrador", words: 2800, content: "No basta con registrar tareas; importa que cada ciclo deje una siguiente accion clara." },
-      { id: createId("sec"), title: "3. Modelo propuesto", goal: "Presentar el modelo", status: "Borrador", words: 3300, content: "El modelo articula capitulos, plan semanal, revision y escritura en un circuito continuo." }
+      { id: createId("sec"), title: "1. Autorregulación doctoral", goal: "Revisar literatura base", status: "En revisión", words: 3000, content: "La autorregulación aparece como capacidad de mantener objetivos visibles y trabajo recurrente." },
+      { id: createId("sec"), title: "2. Sistemas de seguimiento", goal: "Conectar herramientas y continuidad", status: "Borrador", words: 2800, content: "No basta con registrar tareas; importa que cada ciclo deje una siguiente acción clara." },
+      { id: createId("sec"), title: "3. Modelo propuesto", goal: "Presentar el modelo", status: "Borrador", words: 3300, content: "El modelo articula capítulos, plan semanal, revisión y escritura en un circuito continuo." }
     ],
     notes: [
-      { id: createId("nt"), title: "Revisar termino continuidad", type: "Decision", date: demoDateOffset(-2), text: "Mantener continuidad como termino central y no cambiarlo por consistencia para no diluir la idea de seguimiento semanal." }
+      { id: createId("nt"), title: "Revisar término continuidad", type: "Decisión", date: demoDateOffset(-2), text: "Mantener continuidad como término central y no cambiarlo por consistencia para no diluir la idea de seguimiento semanal." }
     ],
     checklist: createDefaultChecklist(62)
   });
 
   const chapter3 = normalizeChapter({
     id: createId("ch"),
-    title: "Metodo y decisiones de muestreo",
-    goal: "Explicar muestra, instrumentos y criterio analitico.",
+    title: "Método y decisiones de muestreo",
+    goal: "Explicar muestra, instrumentos y criterio analítico.",
     argument: "La validez del estudio depende de justificar bien la muestra y el criterio de seguimiento del trabajo doctoral.",
     status: "Borrador",
     progress: 47,
     words: 6400,
     target: 9000,
     due: demoDateOffset(8),
-    tasks: ["Justificar tamano de muestra", "Cerrar tabla de participantes", "Reescribir limites del estudio"],
+    tasks: ["Justificar tamaño de muestra", "Cerrar tabla de participantes", "Reescribir límites del estudio"],
     sections: [
-      { id: createId("sec"), title: "1. Diseno general", goal: "Presentar enfoque del estudio", status: "Cerrada", words: 1900, content: "Se adopta un enfoque cualitativo con seguimiento longitudinal del trabajo doctoral." },
-      { id: createId("sec"), title: "2. Muestra y criterios", goal: "Justificar participantes", status: "En revision", words: 2200, content: "La seccion necesita afinar la razon del numero final de participantes y su heterogeneidad." },
-      { id: createId("sec"), title: "3. Analisis", goal: "Explicar codificacion y decisiones", status: "Borrador", words: 2300, content: "Conviene conectar mejor codificacion, categorias y pregunta principal." }
+      { id: createId("sec"), title: "1. Diseño general", goal: "Presentar enfoque del estudio", status: "Cerrada", words: 1900, content: "Se adopta un enfoque cualitativo con seguimiento longitudinal del trabajo doctoral." },
+      { id: createId("sec"), title: "2. Muestra y criterios", goal: "Justificar participantes", status: "En revisión", words: 2200, content: "La sección necesita afinar la razón del número final de participantes y su heterogeneidad." },
+      { id: createId("sec"), title: "3. Análisis", goal: "Explicar codificación y decisiones", status: "Borrador", words: 2300, content: "Conviene conectar mejor codificación, categorías y pregunta principal." }
     ],
     notes: [
-      { id: createId("nt"), title: "Aclarar por que 18 casos", type: "Duda", date: demoDateOffset(-1), text: "La directora quiere una justificacion mas clara del tamano final de muestra y del criterio de saturacion." }
+      { id: createId("nt"), title: "Aclarar por qué 18 casos", type: "Duda", date: demoDateOffset(-1), text: "La directora quiere una justificación más clara del tamaño final de muestra y del criterio de saturación." }
     ],
     checklist: createDefaultChecklist(47)
   });
@@ -277,7 +315,7 @@ function createDemoState() {
     id: createId("ch"),
     title: "Resultados preliminares",
     goal: "Mostrar primeros patrones sobre continuidad y bloqueo.",
-    argument: "Los datos apuntan a que la continuidad semanal depende mas del cierre de revision que del volumen de escritura aislado.",
+    argument: "Los datos apuntan a que la continuidad semanal depende más del cierre de revisión que del volumen de escritura aislado.",
     status: "Esquema",
     progress: 24,
     words: 2800,
@@ -285,9 +323,9 @@ function createDemoState() {
     due: demoDateOffset(39),
     tasks: ["Definir estructura de hallazgos", "Abrir subapartado sobre interrupciones"],
     sections: [
-      { id: createId("sec"), title: "1. Patrones generales", goal: "Presentar primeros hallazgos", status: "Esquema", words: 1200, content: "Los hallazgos se estan organizando todavia en torno a continuidad, bloqueo y respuesta al feedback." },
-      { id: createId("sec"), title: "2. Casos comparados", goal: "Comparar perfiles", status: "Esquema", words: 900, content: "Falta decidir si esta seccion se organiza por perfiles o por momentos de tesis." },
-      { id: createId("sec"), title: "3. Implicaciones", goal: "Conectar resultados y discusion", status: "Esquema", words: 700, content: "Esta parte aun esta muy abierta y depende del cierre del capitulo metodologico." }
+      { id: createId("sec"), title: "1. Patrones generales", goal: "Presentar primeros hallazgos", status: "Esquema", words: 1200, content: "Los hallazgos se están organizando todavía en torno a continuidad, bloqueo y respuesta al feedback." },
+      { id: createId("sec"), title: "2. Casos comparados", goal: "Comparar perfiles", status: "Esquema", words: 900, content: "Falta decidir si esta sección se organiza por perfiles o por momentos de tesis." },
+      { id: createId("sec"), title: "3. Implicaciones", goal: "Conectar resultados y discusión", status: "Esquema", words: 700, content: "Esta parte aún está muy abierta y depende del cierre del capítulo metodológico." }
     ],
     notes: [],
     checklist: createDefaultChecklist(24)
@@ -299,61 +337,68 @@ function createDemoState() {
     literatureFilter: "",
     project: {
       name: "Continuidad doctoral en plataformas de seguimiento",
-      candidate: "Marta Rios",
-      program: "Doctorado en Educacion y Tecnologia",
-      university: "Universitat Autonoma de Barcelona",
-      mode: "Monografica",
-      phase: "Escritura y revision",
+      candidate: "Marta Ríos",
+      program: "Doctorado en Educación y Tecnología",
+      university: "Universitat Autònoma de Barcelona",
+      mode: "Monográfica",
+      phase: "Escritura y revisión",
       writingTarget: 68000,
-      question: "Como influye un sistema de seguimiento semanal en la continuidad real del trabajo doctoral?",
-      contribution: "Modelo practico para coordinar capitulos, revision y escritura en tesis individuales.",
+      question: "¿Cómo influye un sistema de seguimiento semanal en la continuidad real del trabajo doctoral?",
+      contribution: "Modelo práctico para coordinar capítulos, revisión y escritura en tesis individuales.",
       scope: "Estudio cualitativo con entrevistas, diario de escritura y seguimiento longitudinal."
     },
     chapters: [chapter1, chapter2, chapter3, chapter4],
     readings: [
-      { id: createId("rd"), title: "Doctoral writing as regulated work", authors: "Hernandez, M.", year: "2024", status: "Clave", chapter: chapter2.title, use: "Sostener el modelo de continuidad semanal y autorregulacion.", doi: "10.1200/dw-2024-11" },
-      { id: createId("rd"), title: "Feedback loops in supervision", authors: "Gibson, L.; Patel, R.", year: "2023", status: "Leido", chapter: chapter1.title, use: "Justificar por que el feedback necesita cierre y seguimiento.", doi: "10.9981/fls-2023-07" },
-      { id: createId("rd"), title: "Qualitative sampling in doctoral studies", authors: "Santos, P.", year: "2022", status: "Leyendo", chapter: chapter3.title, use: "Reforzar la justificacion del tamano de muestra.", doi: "10.7751/qs-2022-04" },
-      { id: createId("rd"), title: "Academic progress dashboards", authors: "Lopez, A.; Green, T.", year: "2025", status: "Pendiente", chapter: chapter4.title, use: "Conectar resultados con herramientas de seguimiento academico.", doi: "10.8841/apd-2025-02" }
+      { id: createId("rd"), title: "Doctoral writing as regulated work", authors: "Hernández, M.", year: "2024", status: "Clave", chapter: chapter2.title, use: "Sostener el modelo de continuidad semanal y autorregulacion.", doi: "10.1200/dw-2024-11" },
+      { id: createId("rd"), title: "Feedback loops in supervision", authors: "Gibson, L.; Patel, R.", year: "2023", status: "Leído", chapter: chapter1.title, use: "Justificar por qué el feedback necesita cierre y seguimiento.", doi: "10.9981/fls-2023-07" },
+      { id: createId("rd"), title: "Qualitative sampling in doctoral studies", authors: "Santos, P.", year: "2022", status: "Leyendo", chapter: chapter3.title, use: "Reforzar la justificación del tamaño de muestra.", doi: "10.7751/qs-2022-04" },
+      { id: createId("rd"), title: "Academic progress dashboards", authors: "López, A.; Green, T.", year: "2025", status: "Pendiente", chapter: chapter4.title, use: "Conectar resultados con herramientas de seguimiento académico.", doi: "10.8841/apd-2025-02" }
     ],
     tasks: [
-      { id: createId("tk"), title: "Cerrar respuesta al comentario sobre muestra", area: "Revision", status: "today", due: demoDateOffset(1), effort: "45 min", impact: "Alto" },
-      { id: createId("tk"), title: "Preparar agenda de reunion con directora", area: "Reuniones", status: "today", due: demoDateOffset(0), effort: "30 min", impact: "Alto" },
-      { id: createId("tk"), title: "Redactar cierre del marco teorico", area: "Capítulos", status: "week", due: demoDateOffset(4), effort: "90 min", impact: "Alto" },
-      { id: createId("tk"), title: "Vincular tres lecturas clave al capitulo metodologico", area: "Lecturas", status: "later", due: demoDateOffset(11), effort: "60 min", impact: "Medio" }
+      { id: createId("tk"), title: "Cerrar respuesta al comentario sobre muestra", area: "Revisión", status: "today", due: demoDateOffset(1), effort: "45 min", impact: "Alto" },
+      { id: createId("tk"), title: "Preparar agenda de reunión con directora", area: "Reuniones", status: "today", due: demoDateOffset(0), effort: "30 min", impact: "Alto" },
+      { id: createId("tk"), title: "Redactar cierre del marco teórico", area: "Capítulos", status: "week", due: demoDateOffset(4), effort: "90 min", impact: "Alto" },
+      { id: createId("tk"), title: "Vincular tres lecturas clave al capítulo metodológico", area: "Lecturas", status: "later", due: demoDateOffset(11), effort: "60 min", impact: "Medio" }
     ],
     meetings: [
-      { id: createId("mt"), date: demoDateOffset(3), time: "16:00", type: "Direccion", attendees: "Directora", agenda: "Metodo y criterios de muestreo", decisions: "Llegar con una justificacion mas explicita del tamano de muestra y una tabla final de participantes.", tasks: "Reescribir apartado 2.2 y llevar una agenda de 5 puntos.", next: demoDateOffset(17) },
-      { id: createId("mt"), date: demoDateOffset(-5), time: "11:30", type: "Direccion", attendees: "Directora", agenda: "Revision del marco teorico", decisions: "Reducir repeticion conceptual y cerrar mejor el paso a metodologia.", tasks: "Ajustar secciones 2.2 y 2.3; preparar transicion a capitulo 3.", next: demoDateOffset(3) }
+      { id: createId("mt"), date: demoDateOffset(3), time: "16:00", type: "Dirección", attendees: "Directora", agenda: "Método y criterios de muestreo", decisions: "Llegar con una justificación más explícita del tamaño de muestra y una tabla final de participantes.", tasks: "Reescribir apartado 2.2 y llevar una agenda de 5 puntos.", next: demoDateOffset(17) },
+      { id: createId("mt"), date: demoDateOffset(-5), time: "11:30", type: "Dirección", attendees: "Directora", agenda: "Revisión del marco teórico", decisions: "Reducir repetición conceptual y cerrar mejor el paso a metodología.", tasks: "Ajustar secciones 2.2 y 2.3; preparar transición a capítulo 3.", next: demoDateOffset(3) }
     ],
     reviewComments: [
-      { id: createId("rv"), chapter: chapter3.title, source: "Direccion", comment: "Falta justificar el tamano de muestra y explicar por que 18 casos son suficientes.", response: "Anadir criterio de saturacion y justificar heterogeneidad de perfiles.", status: "Pendiente", priority: "Alta", due: demoDateOffset(2) },
-      { id: createId("rv"), chapter: chapter2.title, source: "Direccion", comment: "La transicion entre autorregulacion y seguimiento todavia suena teoricamente separada.", response: "Reescribir cierre del apartado 2.2 y abrir mejor el 2.3.", status: "En proceso", priority: "Media", due: demoDateOffset(5) },
-      { id: createId("rv"), chapter: chapter1.title, source: "Direccion", comment: "Conviene hacer mas explicita la pregunta doctoral al final de la introduccion.", response: "Nueva version enviada en la reunion pasada.", status: "Resuelto", priority: "Media", due: demoDateOffset(-2) }
+      { id: createId("rv"), chapter: chapter3.title, source: "Dirección", comment: "Falta justificar el tamaño de muestra y explicar por qué 18 casos son suficientes.", response: "Añadir criterio de saturación y justificar heterogeneidad de perfiles.", status: "Pendiente", priority: "Alta", due: demoDateOffset(2) },
+      { id: createId("rv"), chapter: chapter2.title, source: "Dirección", comment: "La transición entre autorregulación y seguimiento todavía suena teóricamente separada.", response: "Reescribir cierre del apartado 2.2 y abrir mejor el 2.3.", status: "En proceso", priority: "Media", due: demoDateOffset(5) },
+      { id: createId("rv"), chapter: chapter1.title, source: "Dirección", comment: "Conviene hacer más explícita la pregunta doctoral al final de la introducción.", response: "Nueva versión enviada en la reunión pasada.", status: "Resuelto", priority: "Media", due: demoDateOffset(-2) }
     ],
     writingLog: [
-      { id: createId("wr"), date: demoDateOffset(-1), chapter: chapter3.title, words: 780, minutes: 95, mood: "Revision", note: "Reescrito el apartado de criterios de inclusion y dejado una duda clara sobre saturacion." },
-      { id: createId("wr"), date: demoDateOffset(-2), chapter: chapter2.title, words: 920, minutes: 110, mood: "Fluido", note: "Cerrado el mapa de conceptos y mejorada la conexion con seguimiento semanal." },
-      { id: createId("wr"), date: demoDateOffset(-4), chapter: chapter1.title, words: 540, minutes: 70, mood: "Neutral", note: "Ajustado el cierre de la introduccion y marcada una nota para abrir con un dato mas fuerte." },
-      { id: createId("wr"), date: demoDateOffset(-6), chapter: chapter2.title, words: 680, minutes: 80, mood: "Trabado", note: "Sesion lenta por duplicacion entre apartados; queda tarea clara para la semana." }
+      { id: createId("wr"), date: demoDateOffset(-1), chapter: chapter3.title, words: 780, minutes: 95, mood: "Revisión", note: "Reescrito el apartado de criterios de inclusión y dejado una duda clara sobre saturación." },
+      { id: createId("wr"), date: demoDateOffset(-2), chapter: chapter2.title, words: 920, minutes: 110, mood: "Fluido", note: "Cerrado el mapa de conceptos y mejorada la conexión con seguimiento semanal." },
+      { id: createId("wr"), date: demoDateOffset(-4), chapter: chapter1.title, words: 540, minutes: 70, mood: "Neutral", note: "Ajustado el cierre de la introducción y marcada una nota para abrir con un dato más fuerte." },
+      { id: createId("wr"), date: demoDateOffset(-6), chapter: chapter2.title, words: 680, minutes: 80, mood: "Trabado", note: "Sesión lenta por duplicación entre apartados; queda tarea clara para la semana." }
     ],
     assistantThread: [
       { id: createId("msg"), role: "assistant", text: "Esta es una demo guiada de DoctoralOS. Puedes recorrer una tesis de ejemplo, pedir un resumen del estado y crear acciones dentro de la demo.", createdAt: demoTimestamp(-1, 9, 6) },
       { id: createId("msg"), role: "user", text: "Resúmeme el progreso actual", createdAt: demoTimestamp(-1, 9, 7) },
       { id: createId("msg"), role: "assistant", text: `Resumen actual:
-- 4 capitulos registrados con un progreso medio del 53%.
+- 4 capítulos registrados con un progreso medio del 53%.
 - 3 tareas activas y 2 comentarios abiertos.
 - 2 reuniones registradas.
-- 2920 palabras escritas en los ultimos 7 dias.
-- Proxima reunion detectada: 27/04/${currentYear} 16:00 con Directora.
+- 2920 palabras escritas en los últimos 7 días.
+- Próxima reunión detectada: 27/04/${currentYear} 16:00 con Directora.
 
-Mi siguiente recomendacion: cerrar el comentario abierto del capitulo metodologico antes de la reunion.`, createdAt: demoTimestamp(-1, 9, 8) }
+Mi siguiente recomendación: cerrar el comentario abierto del capítulo metodológico antes de la reunión.`, createdAt: demoTimestamp(-1, 9, 8) }
     ]
   });
 }
 
-function demoDateOffset(days) {
-  const date = new Date();
+function createDemoForumTopics() {
+  return [
+    { id: createId("ft"), title: "Cómo responder comentarios duros del director", tag: "Supervisión", body: "Me gustaría un espacio para compartir estrategias concretas cuando el feedback llega mezclado o poco accionable.", author: "Comunidad", createdAt: demoTimestamp(-3, 10, 15) },
+    { id: createId("ft"), title: "Bloqueo al escribir el marco teórico", tag: "Escritura", body: "Sería útil poder contrastar cómo otros doctorandos salen del bucle de leer, releer y no cerrar apartados.", author: "Comunidad", createdAt: demoTimestamp(-2, 18, 5) },
+    { id: createId("ft"), title: "Reuniones de seguimiento que sí sirven", tag: "Metodología", body: "Quiero ver agendas reales y formas de convertir una reunión en tareas claras para la semana siguiente.", author: "Comunidad", createdAt: demoTimestamp(-1, 9, 40) }
+  ];
+}
+
+function demoDateOffset(days) {  const date = new Date();
   date.setHours(0, 0, 0, 0);
   date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
@@ -367,8 +412,16 @@ function demoTimestamp(days, hour, minute) {
 }
 
 function normalizeChapter(chapter) {
+  if (chapter.status === "En revision") chapter.status = "En revisión";
   chapter.sections = Array.isArray(chapter.sections) && chapter.sections.length
-    ? chapter.sections
+    ? chapter.sections.map((section) => ({
+        ...section,
+        title: section.title || "Sección sin título",
+        goal: section.goal || "",
+        status: section.status === "En revision" ? "En revisión" : (section.status || "Borrador"),
+        words: Number(section.words || 0),
+        content: section.content || ""
+      }))
     : [createSectionFromChapter(chapter)];
   chapter.notes = Array.isArray(chapter.notes) ? chapter.notes : [];
   chapter.checklist = Array.isArray(chapter.checklist) && chapter.checklist.length
@@ -382,7 +435,7 @@ function createSectionFromChapter(chapter) {
   return {
     id: createId("sec"),
     title: "Texto base",
-    goal: chapter.goal || "Objetivo de la seccion pendiente.",
+    goal: chapter.goal || "Objetivo de la sección pendiente.",
     status: chapter.status || "Borrador",
     words: Number(chapter.words || 0),
     content: ""
@@ -399,11 +452,11 @@ function createDefaultChecklist(progress = 0) {
 }
 
 function createChapterScaffold(data) {
-  const title = data.title || "Nuevo capitulo";
+  const title = data.title || "Nuevo capítulo";
   return normalizeChapter({
     id: createId("ch"),
     title,
-    goal: data.goal || "Definir objetivo del capitulo.",
+    goal: data.goal || "Definir objetivo del capítulo.",
     argument: data.argument || "Argumento pendiente de precisar.",
     status: data.status || "Esquema",
     progress: Number(data.progress || 0),
@@ -415,7 +468,7 @@ function createChapterScaffold(data) {
       {
         id: createId("sec"),
         title: "1. Planteamiento",
-        goal: data.goal || "Situar el objetivo del capitulo.",
+        goal: data.goal || "Situar el objetivo del capítulo.",
         status: data.status || "Esquema",
         words: Number(data.words || 0),
         content: ""
@@ -476,8 +529,8 @@ function updateAuthUI() {
 
   syncStatus.textContent = demoMode ? "Demo guiada" : auth.status === "offline" ? "Backend offline" : "Local";
   syncStatus.title = demoMode
-    ? "Estas recorriendo una tesis de ejemplo. Crea cuenta para empezar la tuya."
-    : "Inicia sesion para sincronizar entre dispositivos.";
+    ? "Estás recorriendo una tesis de ejemplo. Crea cuenta para empezar la tuya."
+    : "Inicia sesión para sincronizar entre dispositivos.";
   authLabel.textContent = demoMode ? "Crear cuenta" : "Cuenta";
   logoutButton.hidden = true;
 }
@@ -493,7 +546,7 @@ function maybeOpenAuthFromUrl() {
 
 function openAuthModal(intent = "login") {
   if (!API_ENABLED) {
-    showToast("Abre la app desde http://localhost para usar cuentas");
+    showToast("Abre la app desde el servidor para usar cuentas");
     return;
   }
   authModal.hidden = false;
@@ -528,7 +581,7 @@ async function handleAuthSubmit(event) {
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "No se pudo iniciar sesion");
+    if (!response.ok) throw new Error(result.error || "No se pudo iniciar sesión");
 
     applySession(result);
     if (result.state && Object.keys(result.state).length) {
@@ -555,18 +608,22 @@ async function handleAuthSubmit(event) {
 }
 
 async function restoreSession() {
-  if (!API_ENABLED || !auth.token) {
+  if (!API_ENABLED) {
     updateAuthUI();
     return;
   }
 
   try {
     setAuthStatus("Comprobando");
-    const response = await fetch("/api/me", {
-      headers: authHeaders()
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Sesion no valida");
+    const response = await fetch("/api/me", { credentials: "same-origin" });
+    const result = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      auth = { user: null, status: "local", lastSync: "", statusLabel: demoMode ? "Demo guiada" : "Local" };
+      updateAuthUI();
+      return;
+    }
+    if (!response.ok) throw new Error(result.error || "No se pudo recuperar la sesión");
 
     applySession(result);
     if (result.state && Object.keys(result.state).length) {
@@ -580,14 +637,12 @@ async function restoreSession() {
       render();
     }
   } catch (error) {
-    localStorage.removeItem(TOKEN_KEY);
-    auth = { ...auth, token: "", user: null, status: "offline", statusLabel: "Backend offline" };
+    auth = { ...auth, user: null, status: "offline", lastSync: "", statusLabel: "Backend offline" };
     updateAuthUI();
   }
 }
 
 function applySession(result) {
-  auth.token = result.token || auth.token;
   auth.user = result.user || null;
   auth.status = "synced";
   auth.lastSync = shortTime();
@@ -596,26 +651,24 @@ function applySession(result) {
     demoMode = false;
     clearDemoQuery();
   }
-  if (auth.token) localStorage.setItem(TOKEN_KEY, auth.token);
   updateAuthUI();
 }
 
 async function logout() {
-  if (auth.token && API_ENABLED) {
+  if (API_ENABLED) {
     try {
-      await fetch("/api/logout", { method: "POST", headers: authHeaders() });
+      await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
     } catch (error) {
-      // La sesion local se cierra igualmente.
+      // La sesión local se cierra igualmente.
     }
   }
-  localStorage.removeItem(TOKEN_KEY);
-  auth = { token: "", user: null, status: "local", lastSync: "" };
+  auth = { user: null, status: "local", lastSync: "", statusLabel: "Local" };
   updateAuthUI();
-  showToast("Sesion cerrada");
+  showToast("Sesión cerrada");
 }
 
 function scheduleSync() {
-  if (!API_ENABLED || !auth.token || !auth.user) {
+  if (!API_ENABLED || !auth.user) {
     updateAuthUI();
     return;
   }
@@ -633,7 +686,7 @@ async function syncNow(showMessage = true) {
     return;
   }
 
-  if (!auth.token || !auth.user) {
+  if (!auth.user) {
     openAuthModal();
     return;
   }
@@ -642,10 +695,19 @@ async function syncNow(showMessage = true) {
     setAuthStatus("Guardando");
     const response = await fetch("/api/state", {
       method: "PUT",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ state })
     });
-    const result = await response.json();
+    const result = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      auth = { user: null, status: "local", lastSync: "", statusLabel: "Vuelve a entrar" };
+      updateAuthUI();
+      if (showMessage) showToast("La sesión ha caducado. Vuelve a entrar.");
+      openAuthModal();
+      return;
+    }
     if (!response.ok) throw new Error(result.error || "No se pudo sincronizar");
 
     auth.status = "synced";
@@ -655,19 +717,15 @@ async function syncNow(showMessage = true) {
     if (showMessage) showToast("Sincronizado");
   } catch (error) {
     auth.status = "offline";
-    auth.statusLabel = "Error sync";
+    auth.statusLabel = "Error de sincronización";
     updateAuthUI();
-    if (showMessage) showToast(error.message || "Sincronizacion fallida");
+    if (showMessage) showToast(error.message || "Sincronización fallida");
   }
 }
 
 function setAuthStatus(label) {
   auth.statusLabel = label;
   updateAuthUI();
-}
-
-function authHeaders() {
-  return auth.token ? { Authorization: `Bearer ${auth.token}` } : {};
 }
 
 function shortTime() {
@@ -713,7 +771,7 @@ function handleScreenClick(event) {
 
   if (action === "assistant-clear") {
     state.assistantThread = createInitialAssistantThread();
-    saveState("Conversacion reiniciada");
+    saveState("Conversación reiniciada");
     render();
     return;
   }
@@ -734,7 +792,7 @@ function handleScreenClick(event) {
   if (action === "delete-chapter") {
     state.chapters = state.chapters.filter((chapter) => chapter.id !== id);
     if (state.editorChapterId === id) state.editorChapterId = state.chapters[0]?.id || "";
-    saveState("Capitulo eliminado");
+    saveState("Capítulo eliminado");
     render();
   }
 
@@ -749,15 +807,15 @@ function handleScreenClick(event) {
     if (chapter) {
       chapter.sections.push({
         id: createId("sec"),
-        title: `Seccion ${chapter.sections.length + 1}`,
-        goal: "Definir funcion de esta seccion.",
+        title: `Sección ${chapter.sections.length + 1}`,
+        goal: "Definir función de esta sección.",
         status: "Esquema",
         words: 0,
         content: ""
       });
       chapter.editorUpdatedAt = new Date().toISOString();
     }
-    saveState("Seccion anadida");
+    saveState("Sección añadida");
     render();
   }
 
@@ -768,7 +826,7 @@ function handleScreenClick(event) {
       recalcChapterWords(chapter);
       chapter.editorUpdatedAt = new Date().toISOString();
     }
-    saveState("Seccion eliminada");
+    saveState("Sección eliminada");
     render();
   }
 
@@ -815,7 +873,7 @@ function handleScreenClick(event) {
 
   if (action === "delete-meeting") {
     state.meetings = state.meetings.filter((meeting) => meeting.id !== id);
-    saveState("Reunion eliminada");
+    saveState("Reunión eliminada");
     render();
   }
 
@@ -832,7 +890,7 @@ function handleScreenClick(event) {
       state.tasks.push({
         id: createId("tk"),
         title: `Resolver comentario: ${comment.chapter}`,
-        area: "Revision",
+        area: "Revisión",
         status: "week",
         due: comment.due || "",
         effort: comment.priority === "Alta" ? "90 min" : "45 min",
@@ -851,7 +909,13 @@ function handleScreenClick(event) {
 
   if (action === "delete-writing") {
     state.writingLog = state.writingLog.filter((entry) => entry.id !== id);
-    saveState("Sesion eliminada");
+    saveState("Sesión eliminada");
+    render();
+  }
+
+  if (action === "delete-forum-topic") {
+    state.forumTopics = state.forumTopics.filter((topic) => topic.id !== id);
+    saveState("Tema eliminado");
     render();
   }
 }
@@ -880,7 +944,7 @@ function handleFormSubmit(event) {
     const chapter = createChapterScaffold(data);
     state.chapters.push(chapter);
     state.editorChapterId = chapter.id;
-    saveState("Capitulo creado");
+    saveState("Capítulo creado");
     form.reset();
     render();
   }
@@ -899,7 +963,7 @@ function handleFormSubmit(event) {
         const sectionId = sectionNode.dataset.sectionId;
         return {
           id: sectionId,
-          title: sectionNode.querySelector(`[name="sectionTitle-${sectionId}"]`)?.value || "Seccion",
+          title: sectionNode.querySelector(`[name="sectionTitle-${sectionId}"]`)?.value || "Sección",
           goal: sectionNode.querySelector(`[name="sectionGoal-${sectionId}"]`)?.value || "",
           status: sectionNode.querySelector(`[name="sectionStatus-${sectionId}"]`)?.value || "Borrador",
           words: Number(sectionNode.querySelector(`[name="sectionWords-${sectionId}"]`)?.value || 0),
@@ -910,7 +974,7 @@ function handleFormSubmit(event) {
       chapter.progress = qualityProgress(chapter);
       chapter.editorUpdatedAt = new Date().toISOString();
     }
-    saveState("Capitulo guardado");
+    saveState("Capítulo guardado");
     render();
   }
 
@@ -926,7 +990,7 @@ function handleFormSubmit(event) {
       });
       chapter.editorUpdatedAt = new Date().toISOString();
     }
-    saveState("Nota anadida");
+    saveState("Nota añadida");
     form.reset();
     render();
   }
@@ -934,16 +998,16 @@ function handleFormSubmit(event) {
   if (formType === "reading") {
     state.readings.push({
       id: createId("rd"),
-      title: data.title || "Lectura sin titulo",
+      title: data.title || "Lectura sin título",
       authors: data.authors || "Autor pendiente",
       year: data.year || "",
-      type: data.type || "Articulo",
+      type: data.type || "Artículo",
       status: data.status || "Pendiente",
-      chapter: data.chapter || "Sin capitulo",
+      chapter: data.chapter || "Sin capítulo",
       use: data.use || "",
       doi: data.doi || ""
     });
-    saveState("Lectura anadida");
+    saveState("Lectura añadida");
     form.reset();
     render();
   }
@@ -968,14 +1032,14 @@ function handleFormSubmit(event) {
       id: createId("mt"),
       date: data.date || new Date().toISOString().slice(0, 10),
       time: data.time || "",
-      type: data.type || "Direccion",
+      type: data.type || "Dirección",
       attendees: data.attendees || "",
       agenda: data.agenda || "",
       decisions: data.decisions || "",
       tasks: data.tasks || "",
       next: data.next || ""
     });
-    saveState("Reunion guardada");
+    saveState("Reunión guardada");
     form.reset();
     render();
   }
@@ -983,8 +1047,8 @@ function handleFormSubmit(event) {
   if (formType === "comment") {
     state.reviewComments.unshift({
       id: createId("rv"),
-      chapter: data.chapter || "Sin capitulo",
-      source: data.source || "Direccion",
+      chapter: data.chapter || "Sin capítulo",
+      source: data.source || "Dirección",
       comment: data.comment || "Comentario pendiente de concretar.",
       response: data.response || "Definir respuesta y criterio de cierre.",
       status: data.status || "Pendiente",
@@ -996,12 +1060,26 @@ function handleFormSubmit(event) {
     render();
   }
 
+  if (formType === "forum-topic") {
+    state.forumTopics.unshift({
+      id: createId("ft"),
+      title: data.title || "Tema sin título",
+      tag: data.tag || "Duda",
+      body: data.body || "",
+      author: auth.user ? auth.user.name : "Borrador",
+      createdAt: new Date().toISOString()
+    });
+    saveState("Tema guardado");
+    form.reset();
+    render();
+  }
+
   if (formType === "writing") {
     const words = Number(data.words || 0);
     state.writingLog.unshift({
       id: createId("wl"),
       date: data.date || todayISO(),
-      chapter: data.chapter || "Sin capitulo",
+      chapter: data.chapter || "Sin capítulo",
       words,
       minutes: Number(data.minutes || 0),
       mood: data.mood || "Neutral",
@@ -1009,7 +1087,7 @@ function handleFormSubmit(event) {
     });
     const chapter = state.chapters.find((item) => item.title === data.chapter);
     if (chapter) chapter.words = Number(chapter.words || 0) + words;
-    saveState("Sesion de escritura guardada");
+    saveState("Sesión de escritura guardada");
     form.reset();
     render();
   }
@@ -1046,6 +1124,7 @@ function render() {
     planner: renderPlanner,
     reviews: renderReviews,
     writing: renderWriting,
+    forum: renderForum,
     assistant: renderAssistant
   };
 
@@ -1063,7 +1142,7 @@ function renderDashboard() {
   const totalWords = state.chapters.reduce((sum, chapter) => sum + Number(chapter.words || 0), 0);
   const targetWords = Number(state.project.writingTarget || 0);
   const nextTask = [...state.tasks].sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
-  const readingLinked = state.readings.filter((item) => item.chapter && item.chapter !== "Sin capitulo").length;
+  const readingLinked = state.readings.filter((item) => item.chapter && item.chapter !== "Sin capítulo").length;
   const pendingComments = state.reviewComments.filter((item) => item.status !== "Resuelto").length;
   const wordsThisWeek = writingWordsLastDays(7);
   const hasStarted = state.chapters.length || state.tasks.length || state.meetings.length || state.reviewComments.length;
@@ -1071,8 +1150,8 @@ function renderDashboard() {
     <section class="demo-banner panel">
       <div>
         <p class="card-kicker">Demo guiada</p>
-        <h2>Estas viendo una tesis de ejemplo ya preparada para ensenar el producto</h2>
-        <p>Recorre el panel, abre el capitulo metodologico, revisa comentarios y prueba el asistente. Cuando quieras pasar a trabajo real, crea tu cuenta.</p>
+        <h2>Estás viendo una tesis de ejemplo ya preparada para enseñar el producto</h2>
+        <p>Recorre el panel, abre el capítulo metodológico, revisa comentarios y prueba el asistente. Cuando quieras pasar a trabajo real, crea tu cuenta.</p>
       </div>
       <div class="summary-actions">
         <a class="button" href="/app?auth=register">Crear cuenta</a>
@@ -1088,14 +1167,14 @@ function renderDashboard() {
         <div>
           <p class="eyebrow">${demoMode ? "Demo guiada de producto" : "Sistema de trabajo doctoral"}</p>
           <h2>${escapeHtml(state.project.name)}</h2>
-          <p>${escapeHtml(state.project.question || "Convierte la tesis en capitulos, tareas semanales, reuniones utiles y sesiones de escritura medibles.")}</p>
+          <p>${escapeHtml(state.project.question || "Convierte la tesis en capítulos, tareas semanales, reuniones útiles y sesiones de escritura medibles.")}</p>
           <div class="badge-row">
             <span class="badge teal">${escapeHtml(state.project.phase || "Organizando el trabajo")}</span>
             <span class="badge violet">${escapeHtml(state.project.mode)}</span>
             <span class="badge gold">Respaldo exportable</span>
           </div>
           <div class="summary-actions">
-            <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Escribir capitulo</button>
+            <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Escribir capítulo</button>
             <button class="ghost-button" data-action="go" data-view="planner" type="button"><span data-icon="calendar"></span>Planificar semana</button>
             <button class="ghost-button" data-action="go" data-view="reviews" type="button"><span data-icon="review"></span>Resolver comentarios</button>
             <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir consejo</button>
@@ -1111,8 +1190,8 @@ function renderDashboard() {
 
       <div class="panel">
         <p class="card-kicker">Siguiente foco</p>
-        <h2>${nextTask ? escapeHtml(nextTask.title) : hasStarted ? "Elige una tarea para esta semana" : "Crea tu primer capitulo"}</h2>
-        <p>${nextTask ? `Vence: ${formatDate(nextTask.due)}. Impacto: ${escapeHtml(nextTask.impact)}.` : "La v1 funciona con una regla simple: capitulo activo, plan semanal y comentarios cerrados."}</p>
+        <h2>${nextTask ? escapeHtml(nextTask.title) : hasStarted ? "Elige una tarea para esta semana" : "Crea tu primer capítulo"}</h2>
+        <p>${nextTask ? `Vence: ${formatDate(nextTask.due)}. Impacto: ${escapeHtml(nextTask.impact)}.` : "La v1 funciona con una regla simple: capítulo activo, plan semanal y comentarios cerrados."}</p>
         <button class="ghost-button" data-action="go" data-view="${nextTask ? "planner" : "chapters"}" type="button"><span data-icon="arrow"></span>Continuar</button>
       </div>
     </section>
@@ -1123,20 +1202,20 @@ function renderDashboard() {
       ${metric("Plan", state.tasks.filter((task) => task.status !== "later").length, "tareas activas")}
       ${metric("Comentarios", pendingComments, "pendientes de respuesta")}
       ${metric("Semana", formatNumber(wordsThisWeek), "palabras registradas")}
-      ${metric("Lecturas", `${readingLinked}/${state.readings.length}`, "vinculadas a capitulos")}
+      ${metric("Lecturas", `${readingLinked}/${state.readings.length}`, "vinculadas a capítulos")}
     </section>
 
     <section class="onboarding-strip">
       <article class="${state.chapters.length ? "is-done" : ""}">
         <span class="step-number">1</span>
-        <h3>Crea tus capitulos</h3>
-        <p>Define la estructura minima y el capitulo activo.</p>
+        <h3>Crea tus capítulos</h3>
+        <p>Define la estructura mínima y el capítulo activo.</p>
         <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir</button>
       </article>
       <article class="${state.tasks.length ? "is-done" : ""}">
         <span class="step-number">2</span>
         <h3>Planifica la semana</h3>
-        <p>Convierte tesis en tareas pequenas con fecha.</p>
+        <p>Convierte la tesis en tareas pequeñas con fecha.</p>
         <button class="tiny-button" data-action="go" data-view="planner" type="button">Abrir</button>
       </article>
       <article class="${state.reviewComments.length || state.meetings.length ? "is-done" : ""}">
@@ -1152,7 +1231,7 @@ function renderDashboard() {
         <div class="section-header">
           <div>
             <p class="card-kicker">Arquitectura de tesis</p>
-            <h2>Capitulos y avance</h2>
+            <h2>Capítulos y avance</h2>
           </div>
           <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir</button>
         </div>
@@ -1175,7 +1254,7 @@ function renderDashboard() {
       <article class="card">
         <div class="section-header">
           <div>
-            <p class="card-kicker">Revision</p>
+            <p class="card-kicker">Revisión</p>
             <h2>Comentarios abiertos</h2>
           </div>
           <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir</button>
@@ -1189,7 +1268,7 @@ function renderDashboard() {
             <p>${escapeHtml(comment.comment)}</p>
             <span class="muted">Limite: ${formatDate(comment.due)}</span>
           </div>
-        `).join("") || emptyState("Sin comentarios todavia. Registra los proximos acuerdos de revision.")}
+        `).join("") || emptyState("Sin comentarios todavía. Registra los próximos acuerdos de revisión.")}
       </article>
     </section>
   `;
@@ -1201,7 +1280,7 @@ function renderChapters() {
   if (!activeChapter) {
     screen.innerHTML = `
       <section class="chapter-layout">
-        <div class="empty-state">Crea el primer capitulo para activar el editor.</div>
+        <div class="empty-state">Crea el primer capítulo para activar el editor.</div>
         ${newChapterPanel()}
       </section>
     `;
@@ -1219,7 +1298,7 @@ function renderChapters() {
             <h2>${escapeHtml(activeChapter.title)}</h2>
             <p>Edita secciones, notas, tareas pendientes y checklist de calidad en un solo lugar.</p>
           </div>
-          <button class="ghost-button" data-action="add-section" data-id="${activeChapter.id}" type="button"><span data-icon="plus"></span>Nueva seccion</button>
+          <button class="ghost-button" data-action="add-section" data-id="${activeChapter.id}" type="button"><span data-icon="plus"></span>Nueva sección</button>
         </div>
 
         <div class="chapter-tabs" role="tablist" aria-label="Capítulos">
@@ -1240,15 +1319,15 @@ function renderChapters() {
               </div>
             </div>
             <div class="editor-meta-grid">
-              ${field("Titulo", "title", "input", activeChapter.title, true)}
-              ${selectField("Estado", "status", ["Esquema", "Borrador", "En revision", "Aprobado"], activeChapter.status)}
+              ${field("Título", "title", "input", activeChapter.title, true)}
+              ${selectField("Estado", "status", ["Esquema", "Borrador", "En revisión", "Aprobado"], activeChapter.status)}
               ${field("Objetivo", "goal", "textarea", activeChapter.goal, true)}
               ${field("Argumento central", "argument", "textarea", activeChapter.argument, true)}
               <div class="inline-fields">
                 ${field("Objetivo palabras", "target", "number", activeChapter.target, true)}
                 ${field("Fecha de entrega", "due", "date", activeChapter.due, true)}
               </div>
-              ${field("Tareas, una por linea", "tasks", "textarea", (activeChapter.tasks || []).join("\n"), true)}
+              ${field("Tareas, una por línea", "tasks", "textarea", (activeChapter.tasks || []).join("\n"), true)}
             </div>
           </section>
 
@@ -1265,15 +1344,15 @@ function renderChapters() {
                   <div class="section-editor-head">
                     <span class="step-number">${index + 1}</span>
                     <div class="section-title-fields">
-                      ${field(`Titulo seccion ${index + 1}`, `sectionTitle-${section.id}`, "input", section.title, true)}
+                      ${field(`Título sección ${index + 1}`, `sectionTitle-${section.id}`, "input", section.title, true)}
                     </div>
                     <button class="tiny-button" data-action="delete-section" data-chapter-id="${activeChapter.id}" data-id="${section.id}" type="button"><span data-icon="trash"></span></button>
                   </div>
                   <div class="inline-fields">
-                    ${selectField("Estado", `sectionStatus-${section.id}`, ["Esquema", "Borrador", "En revision", "Cerrada"], section.status)}
+                    ${selectField("Estado", `sectionStatus-${section.id}`, ["Esquema", "Borrador", "En revisión", "Cerrada"], section.status)}
                     ${field("Palabras", `sectionWords-${section.id}`, "number", section.words, true)}
                   </div>
-                  ${field("Funcion de la seccion", `sectionGoal-${section.id}`, "textarea", section.goal, true)}
+                  ${field("Función de la sección", `sectionGoal-${section.id}`, "textarea", section.goal, true)}
                   ${field("Borrador / notas de texto", `sectionContent-${section.id}`, "textarea", section.content, true)}
                 </article>
               `).join("")}
@@ -1284,7 +1363,7 @@ function renderChapters() {
             <div class="section-header">
               <div>
                 <p class="card-kicker">Checklist</p>
-                <h2>Calidad del capitulo</h2>
+                <h2>Calidad del capítulo</h2>
               </div>
             </div>
             <div class="checklist-grid">
@@ -1298,8 +1377,8 @@ function renderChapters() {
           </section>
 
           <div class="chapter-controls editor-actions">
-            <button class="button" type="submit"><span data-icon="save"></span>Guardar capitulo</button>
-            <button class="ghost-button" data-action="chapter-status" data-id="${activeChapter.id}" data-value="En revision" type="button">Enviar a revision</button>
+            <button class="button" type="submit"><span data-icon="save"></span>Guardar capítulo</button>
+            <button class="ghost-button" data-action="chapter-status" data-id="${activeChapter.id}" data-value="En revisión" type="button">Enviar a revisión</button>
             <button class="ghost-button" data-action="chapter-status" data-id="${activeChapter.id}" data-value="Aprobado" type="button">Marcar aprobado</button>
             <button class="danger-button" data-action="delete-chapter" data-id="${activeChapter.id}" type="button"><span data-icon="trash"></span>Eliminar</button>
           </div>
@@ -1324,7 +1403,7 @@ function renderChapters() {
                 </div>
                 <p>${escapeHtml(note.text)}</p>
               </article>
-            `).join("") || emptyState("Sin notas todavia.")}
+            `).join("") || emptyState("Sin notas todavía.")}
           </div>
         </section>
       </div>
@@ -1333,13 +1412,13 @@ function renderChapters() {
         <div class="form-panel">
           <h2>Nueva nota</h2>
           <form class="form-grid" data-form="chapter-note" data-chapter-id="${activeChapter.id}">
-            ${field("Titulo", "title", "input", "Decision de capitulo")}
+            ${field("Título", "title", "input", "Decisión de capítulo")}
             <div class="inline-fields">
-              ${selectField("Tipo", "type", ["Idea", "Duda", "Decision", "Cita pendiente", "Feedback"])}
+              ${selectField("Tipo", "type", ["Idea", "Duda", "Decisión", "Cita pendiente", "Feedback"])}
               ${field("Fecha", "date", "date", todayISO(), true)}
             </div>
-            ${field("Texto", "text", "textarea", "Anota la decision, duda o cita pendiente")}
-            <button class="button" type="submit"><span data-icon="plus"></span>Anadir nota</button>
+            ${field("Texto", "text", "textarea", "Anota la decisión, duda o cita pendiente")}
+            <button class="button" type="submit"><span data-icon="plus"></span>Añadir nota</button>
           </form>
         </div>
 
@@ -1352,13 +1431,13 @@ function renderChapters() {
 function newChapterPanel() {
   return `
     <div class="form-panel">
-      <h2>Nuevo capitulo</h2>
+      <h2>Nuevo capítulo</h2>
       <form class="form-grid" data-form="chapter">
-        ${field("Titulo", "title", "input", "Discusion")}
-        ${field("Objetivo", "goal", "textarea", "Que debe lograr este capitulo")}
-        ${field("Argumento central", "argument", "textarea", "La idea que sostiene el capitulo")}
+        ${field("Título", "title", "input", "Discusion")}
+        ${field("Objetivo", "goal", "textarea", "Qué debe lograr este capítulo")}
+        ${field("Argumento central", "argument", "textarea", "La idea que sostiene el capítulo")}
         <div class="inline-fields">
-          ${selectField("Estado", "status", ["Esquema", "Borrador", "En revision", "Aprobado"])}
+          ${selectField("Estado", "status", ["Esquema", "Borrador", "En revisión", "Aprobado"])}
           ${field("Progreso", "progress", "number", "0")}
         </div>
         <div class="inline-fields">
@@ -1366,8 +1445,8 @@ function newChapterPanel() {
           ${field("Objetivo palabras", "target", "number", "8000")}
         </div>
         ${field("Fecha de entrega", "due", "date", "")}
-        ${field("Tareas, una por linea", "tasks", "textarea", "Revisar citas\nAnadir tabla")}
-        <button class="button" type="submit"><span data-icon="plus"></span>Anadir capitulo</button>
+        ${field("Tareas, una por línea", "tasks", "textarea", "Revisar citas\nAñadir tabla")}
+        <button class="button" type="submit"><span data-icon="plus"></span>Añadir capítulo</button>
       </form>
     </div>
   `;
@@ -1385,14 +1464,14 @@ function renderLiterature() {
       <div>
         <div class="section-header">
           <div>
-            <p class="eyebrow">Lecturas minimas</p>
-            <h2>Fuentes vinculadas a capitulos</h2>
-            <p>En la v1, las lecturas sirven para sostener capitulos concretos y mantener clara su utilidad en la tesis.</p>
+            <p class="eyebrow">Lecturas mínimas</p>
+            <h2>Fuentes vinculadas a capítulos</h2>
+            <p>En la v1, las lecturas sirven para sostener capítulos concretos y mantener clara su utilidad en la tesis.</p>
           </div>
         </div>
 
         <div class="filter-row">
-          <input data-literature-filter type="search" value="${escapeAttribute(state.literatureFilter || "")}" placeholder="Buscar por autor, capitulo o estado">
+          <input data-literature-filter type="search" value="${escapeAttribute(state.literatureFilter || "")}" placeholder="Buscar por autor, capítulo o estado">
         </div>
 
         <div class="table-wrap">
@@ -1400,7 +1479,7 @@ function renderLiterature() {
             <thead>
               <tr>
                 <th>Autor</th>
-                <th>Ano</th>
+                <th>Año</th>
                 <th>Tema</th>
                 <th>Uso en tesis</th>
                 <th></th>
@@ -1425,16 +1504,16 @@ function renderLiterature() {
         <div class="form-panel">
           <h2>Nueva ficha</h2>
           <form class="form-grid" data-form="reading">
-            ${field("Titulo", "title", "input", "Articulo o libro")}
+            ${field("Título", "title", "input", "Artículo o libro")}
             ${field("Autores", "authors", "input", "Apellido, A.")}
-            ${field("Ano", "year", "number", "2026")}
+            ${field("Año", "year", "number", "2026")}
             <div class="inline-fields">
-              ${selectField("Estado", "status", ["Pendiente", "Leyendo", "Leido", "Clave", "Descartado"])}
+              ${selectField("Estado", "status", ["Pendiente", "Leyendo", "Leído", "Clave", "Descartado"])}
               ${chapterSelect("Capítulo", "chapter")}
             </div>
-            ${field("Uso en mi tesis", "use", "textarea", "Donde lo citare y para que")}
+            ${field("Uso en mi tesis", "use", "textarea", "Dónde lo citaré y para qué")}
             ${field("DOI / URL", "doi", "input", "10.xxxx/...")}
-            <button class="button" type="submit"><span data-icon="plus"></span>Anadir lectura</button>
+            <button class="button" type="submit"><span data-icon="plus"></span>Añadir lectura</button>
           </form>
         </div>
       </aside>
@@ -1447,7 +1526,7 @@ function renderPlanner() {
   const columns = [
     { id: "today", title: "Hoy" },
     { id: "week", title: "Esta semana" },
-    { id: "later", title: "Despues" }
+    { id: "later", title: "Después" }
   ];
 
   screen.innerHTML = `
@@ -1455,7 +1534,7 @@ function renderPlanner() {
       <div>
         <p class="eyebrow">Trabajo sostenible</p>
         <h2>Plan semanal</h2>
-        <p>Convierte capitulos, lecturas y reuniones en tareas pequenas con vencimiento e impacto claro.</p>
+        <p>Convierte capítulos, lecturas y reuniones en tareas pequeñas con vencimiento e impacto claro.</p>
       </div>
     </section>
 
@@ -1475,7 +1554,7 @@ function renderPlanner() {
       <article class="form-panel">
         <h2>Nueva tarea</h2>
         <form class="form-grid" data-form="task">
-          ${field("Tarea", "title", "input", "Escribir 500 palabras del marco teorico")}
+          ${field("Tarea", "title", "input", "Escribir 500 palabras del marco teórico")}
           <div class="inline-fields">
             ${field("Area", "area", "input", "Capítulos")}
             ${selectField("Columna", "status", ["today", "week", "later"])}
@@ -1485,20 +1564,20 @@ function renderPlanner() {
             ${field("Esfuerzo", "effort", "input", "45 min")}
           </div>
           ${selectField("Impacto", "impact", ["Alto", "Medio", "Bajo"])}
-          <button class="button" type="submit"><span data-icon="plus"></span>Anadir tarea</button>
+          <button class="button" type="submit"><span data-icon="plus"></span>Añadir tarea</button>
         </form>
       </article>
       <article class="card">
         <p class="card-kicker">Guia semanal</p>
-        <h2>Una tesis avanza por entregables pequenos</h2>
-        <p>Elige pocas tareas, asigna fecha y mueve lo que no quepa a "Despues".</p>
+        <h2>Una tesis avanza por entregables pequeños</h2>
+        <p>Elige pocas tareas, asigna fecha y mueve lo que no quepa a "Después".</p>
       </article>
     </section>
   `;
 }
 
 function renderReviews() {
-  const columns = ["Pendiente", "En proceso", "Necesita aclaracion", "Resuelto"];
+  const columns = ["Pendiente", "En proceso", "Necesita aclaración", "Resuelto"];
   const open = state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
   const high = state.reviewComments.filter((comment) => comment.priority === "Alta" && comment.status !== "Resuelto").length;
   const latest = state.meetings[0];
@@ -1508,9 +1587,9 @@ function renderReviews() {
       <div>
         <div class="section-header">
           <div>
-            <p class="eyebrow">Reuniones y revision</p>
+            <p class="eyebrow">Reuniones y revisión</p>
             <h2>Acuerdos, feedback y cierre</h2>
-            <p>La v1 une reuniones y comentarios para que cada conversacion termine en tareas y decisiones visibles.</p>
+            <p>La v1 une reuniones y comentarios para que cada conversación termine en tareas y decisiones visibles.</p>
           </div>
         </div>
 
@@ -1523,13 +1602,13 @@ function renderReviews() {
 
         ${latest ? `
           <article class="panel">
-            <p class="card-kicker">Ultima reunion</p>
+            <p class="card-kicker">Última reunión</p>
             <h2>${escapeHtml(formatMeetingLabel(latest))}</h2>
             <p><strong>Decisiones:</strong> ${escapeHtml(latest.decisions)}</p>
             <p><strong>Tareas:</strong> ${escapeHtml(latest.tasks)}</p>
             <div class="generated-box">${escapeHtml(generateMeetingEmail(latest))}</div>
           </article>
-        ` : emptyState("Registra tu proxima reunion para convertir acuerdos en tareas.")}
+        ` : emptyState("Registra tu próxima reunión para convertir acuerdos en tareas.")}
 
         <section class="kanban review-board" style="margin-top: 18px;">
           ${columns.map((column) => {
@@ -1549,7 +1628,7 @@ function renderReviews() {
               <div class="list-row-header">
                 <div>
                   <strong>${escapeHtml(formatMeetingLabel(meeting))}</strong>
-                  <div class="meeting-meta muted">${escapeHtml(meeting.attendees)} &middot; proxima ${formatDate(meeting.next)}</div>
+                  <div class="meeting-meta muted">${escapeHtml(meeting.attendees)} &middot; próxima ${formatDate(meeting.next)}</div>
                 </div>
                 <button class="tiny-button" data-action="delete-meeting" data-id="${meeting.id}" type="button"><span data-icon="trash"></span></button>
               </div>
@@ -1563,19 +1642,19 @@ function renderReviews() {
 
       <aside class="side-stack">
         <div class="form-panel">
-          <h2>Nueva reunion</h2>
+          <h2>Nueva reunión</h2>
           <form class="form-grid" data-form="meeting">
             <div class="inline-fields">
               ${field("Fecha", "date", "date", new Date().toISOString().slice(0, 10), true)}
               ${field("Hora", "time", "time", "")}
-              ${selectField("Tipo", "type", ["Direccion", "Comite", "Grupo", "Revision interna"])}
+              ${selectField("Tipo", "type", ["Dirección", "Comité", "Grupo", "Revisión interna"])}
             </div>
             ${field("Asistentes", "attendees", "input", "Director/a, codirector/a")}
             ${field("Agenda", "agenda", "textarea", "Temas a tratar")}
             ${field("Decisiones", "decisions", "textarea", "Acuerdos tomados")}
             ${field("Tareas", "tasks", "textarea", "Tareas y responsables")}
             ${field("Próxima reunión", "next", "date", "")}
-            <button class="button" type="submit"><span data-icon="plus"></span>Guardar reunion</button>
+            <button class="button" type="submit"><span data-icon="plus"></span>Guardar reunión</button>
           </form>
         </div>
 
@@ -1586,13 +1665,13 @@ function renderReviews() {
               ${chapterSelect("Capítulo", "chapter")}
               ${field("Fuente", "source", "input", "Director/a")}
             </div>
-            ${field("Comentario recibido", "comment", "textarea", "Que hay que revisar")}
-            ${field("Respuesta prevista", "response", "textarea", "Como se va a resolver")}
+            ${field("Comentario recibido", "comment", "textarea", "Qué hay que revisar")}
+            ${field("Respuesta prevista", "response", "textarea", "Cómo se va a resolver")}
             <div class="inline-fields">
               ${selectField("Estado", "status", columns)}
               ${selectField("Prioridad", "priority", ["Alta", "Media", "Baja"])}
             </div>
-            ${field("Fecha limite", "due", "date", "")}
+            ${field("Fecha límite", "due", "date", "")}
             <button class="button" type="submit"><span data-icon="plus"></span>Registrar comentario</button>
           </form>
         </div>
@@ -1613,14 +1692,14 @@ function renderWriting() {
         <div class="section-header">
           <div>
             <p class="eyebrow">Continuidad de escritura</p>
-            <h2>Bitacora de escritura</h2>
-            <p>Registra sesiones reales, suma palabras al capitulo correspondiente y observa el ritmo semanal.</p>
+            <h2>Bitácora de escritura</h2>
+            <p>Registra sesiones reales, suma palabras al capítulo correspondiente y observa el ritmo semanal.</p>
           </div>
         </div>
 
         <section class="metrics-grid compact-metrics">
           ${metric("Total registrado", formatNumber(totalWords), "palabras en sesiones")}
-          ${metric("Ultimos 7 dias", formatNumber(last7), "palabras recientes")}
+          ${metric("Últimos 7 días", formatNumber(last7), "palabras recientes")}
           ${metric("Horas", Math.round(totalMinutes / 60), "registradas")}
           ${metric("Ritmo", `${writingPace()} p/h`, "palabras por hora")}
         </section>
@@ -1642,12 +1721,12 @@ function renderWriting() {
               </div>
               <p>${escapeHtml(entry.note)}</p>
             </article>
-          `).join("") || emptyState("Todavia no hay sesiones de escritura.")}
+          `).join("") || emptyState("Todavía no hay sesiones de escritura.")}
         </section>
       </div>
 
       <aside class="form-panel">
-        <h2>Nueva sesion</h2>
+        <h2>Nueva sesión</h2>
         <form class="form-grid" data-form="writing">
           <div class="inline-fields">
             ${field("Fecha", "date", "date", todayISO(), true)}
@@ -1666,10 +1745,71 @@ function renderWriting() {
   `;
 }
 
+function renderForum() {
+  const topics = [...state.forumTopics].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
+  screen.innerHTML = `
+    <section class="section-header">
+      <div>
+        <p class="eyebrow">Próximamente</p>
+        <h2>Foro doctoral</h2>
+        <p>Este espacio está reservado para una comunidad cuidada de doctorandos. Más adelante servirá para compartir inquietudes, dudas y conversaciones sin mezclarlo con el trabajo individual de la tesis.</p>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <article class="panel">
+        <p class="card-kicker">Qué queremos construir</p>
+        <h2>Una comunidad útil, no ruido</h2>
+        <ul class="quality-list compact-list">
+          <li>Dudas sobre capítulos, metodología y escritura doctoral</li>
+          <li>Conversaciones sobre supervisión, bloqueos y organización semanal</li>
+          <li>Hilos moderados por temas para no convertirlo en un chat caótico</li>
+          <li>Privacidad y normas claras antes de abrirlo a usuarios reales</li>
+        </ul>
+      </article>
+
+      <article class="form-panel">
+        <h2>Deja un tema en borrador</h2>
+        <p class="muted">Todavía no es un foro compartido. De momento puedes guardar ideas de conversaciones que te gustaría encontrar cuando lo lancemos.</p>
+        <form class="form-grid" data-form="forum-topic">
+          ${field("Tema", "title", "input", "Cómo responder comentarios duros del director")}
+          ${selectField("Tipo", "tag", ["Duda", "Metodología", "Escritura", "Supervisión", "Bloqueos", "Vida doctoral"])}
+          ${field("Mensaje inicial", "body", "textarea", "Explica la inquietud o la conversación que te gustaría abrir")}
+          <button class="button" type="submit"><span data-icon="plus"></span>Guardar tema</button>
+        </form>
+      </article>
+    </section>
+
+    <section class="notes-panel">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Borradores de comunidad</p>
+          <h2>Temas que ya merecen conversación</h2>
+        </div>
+      </div>
+      <div class="notes-grid">
+        ${topics.map((topic) => `
+          <article class="note-card">
+            <div class="list-row-header">
+              <div>
+                <strong>${escapeHtml(topic.title)}</strong>
+                <div class="muted">${escapeHtml(topic.tag)} · ${escapeHtml(topic.author)} · ${formatDateTime(topic.createdAt)}</div>
+              </div>
+              <button class="tiny-button" data-action="delete-forum-topic" data-id="${topic.id}" type="button"><span data-icon="trash"></span></button>
+            </div>
+            <p>${escapeHtml(topic.body)}</p>
+          </article>
+        `).join("") || emptyState("Todavía no hay temas guardados.")}
+      </div>
+    </section>
+  `;
+}
+
 function renderAssistant() {
   const suggestions = assistantSuggestions();
   const assistantModeText = assistantCanUseRemote()
-    ? "IA activa con acciones sobre tu tesis."
+    ? "El asistente intentará usar IA si está disponible y, si no, volverá al modo local sin romper tu trabajo."
     : demoMode
       ? "Demo guiada activa. Las acciones se guardan dentro de esta tesis de ejemplo."
       : "Modo local activo. Puedes trabajar con el asistente básico ahora y activar la IA más adelante cuando conectes OpenAI.";
@@ -1728,7 +1868,7 @@ function renderAssistantMessage(message) {
   return `
     <article class="assistant-message ${isUser ? "is-user" : "is-assistant"}">
       <div class="assistant-message-head">
-        <strong>${isUser ? "Tu" : "Asistente"}</strong>
+        <strong>${isUser ? "Tú" : "Asistente"}</strong>
         <span>${formatDateTime(message.createdAt)}</span>
       </div>
       <div class="assistant-message-body">${escapeMultiline(message.text)}</div>
@@ -1809,7 +1949,7 @@ async function submitAssistantPrompt(message) {
 }
 
 function assistantCanUseRemote() {
-  return API_ENABLED && Boolean(auth.token && auth.user);
+  return API_ENABLED && Boolean(auth.user);
 }
 
 async function requestAssistantReply(message) {
@@ -1817,11 +1957,12 @@ async function requestAssistantReply(message) {
 
   const response = await fetch("/api/assistant", {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, state })
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "El asistente no esta disponible ahora mismo");
+  if (!response.ok) throw new Error(result.error || "El asistente no está disponible ahora mismo");
 
   auth.status = "synced";
   auth.statusLabel = "Sincronizado";
@@ -1855,7 +1996,7 @@ function buildAssistantReply(message) {
   if (chapter) return { reply: buildChapterAdvice(chapter) };
 
   return {
-    reply: "Puedo ayudarte con cuatro cosas muy utiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Crear tarea enviar borrador del capitulo 2 para manana\n- Agendar reunion el martes a las 16:00 con directora sobre metodologia"
+    reply: "Puedo ayudarte con cuatro cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
   };
 }
 
@@ -1893,14 +2034,14 @@ function buildProgressSummary() {
   const wordsThisWeek = writingWordsLastDays(7);
   const nextMeeting = upcomingMeeting();
   const lines = [
-    `- ${state.chapters.length} capitulos registrados con un progreso medio del ${overallProgress()}%.`,
+    `- ${state.chapters.length} capítulos registrados con un progreso medio del ${overallProgress()}%.`,
     `- ${openTasks} tareas activas y ${pendingComments} comentarios abiertos.`,
     `- ${state.meetings.length} reuniones registradas.`,
-    `- ${formatNumber(wordsThisWeek)} palabras escritas en los ultimos 7 dias.`
+    `- ${formatNumber(wordsThisWeek)} palabras escritas en los últimos 7 días.`
   ];
-  if (nextMeeting) lines.push(`- Proxima reunion detectada: ${formatMeetingLabel(nextMeeting)}.`);
+  if (nextMeeting) lines.push(`- Próxima reunión detectada: ${formatMeetingLabel(nextMeeting)}.`);
   return `Resumen actual:
-${lines.join("\n")}\n\nMi siguiente recomendacion: ${recommendNextMove()}`;
+${lines.join("\n")}\n\nMi siguiente recomendación: ${recommendNextMove()}`;
 }
 
 function buildWeeklyPriorities() {
@@ -1914,10 +2055,10 @@ function buildWeeklyPriorities() {
   const chapter = nextChapterToPush();
   if (urgentTask) lines.push(`- Tarea prioritaria: ${urgentTask.title}${urgentTask.due ? ` antes del ${formatDate(urgentTask.due)}` : ""}.`);
   if (urgentComment) lines.push(`- Cierra el comentario de ${urgentComment.chapter}${urgentComment.due ? ` antes del ${formatDate(urgentComment.due)}` : ""}.`);
-  if (chapter) lines.push(`- Empuja ${chapter.title}: esta cerca de entrega y va por ${chapter.progress}% de avance.`);
-  if (!lines.length) lines.push("- Crea un capitulo activo o una tarea semanal para empezar a mover la tesis.");
+  if (chapter) lines.push(`- Empuja ${chapter.title}: está cerca de entrega y va por ${chapter.progress}% de avance.`);
+  if (!lines.length) lines.push("- Crea un capítulo activo o una tarea semanal para empezar a mover la tesis.");
   return `Te propongo este foco para la semana:
-${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revision y una administrativa como maximo.`;
+${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revisión y una administrativa como máximo.`;
 }
 
 function buildMeetingAdvice() {
@@ -1925,15 +2066,15 @@ function buildMeetingAdvice() {
   const chapter = nextChapterToPush();
   const urgentComment = [...state.reviewComments].find((comment) => comment.status !== "Resuelto");
   if (!nextMeeting) {
-    return "No veo ninguna reunion futura registrada. Si quieres, puedo agendar una desde aqui con una frase como: Agendar reunion el martes a las 16:00 con directora sobre marco teorico.";
+    return "No veo ninguna reunión futura registrada. Si quieres, puedo agendar una desde aquí con una frase como: Agendar reunión el martes a las 16:00 con directora sobre marco teórico.";
   }
   const lines = [
-    `- Estado del capitulo mas sensible: ${chapter ? `${chapter.title} (${chapter.progress}% de avance)` : "elige un capitulo principal"}.`,
-    "- Una decision que necesitas cerrar, no solo avances.",
+    `- Estado del capítulo más sensible: ${chapter ? `${chapter.title} (${chapter.progress}% de avance)` : "elige un capítulo principal"}.`,
+    "- Una decisión que necesitas cerrar, no solo avances.",
     urgentComment ? `- Respuesta propuesta al comentario abierto de ${urgentComment.chapter}.` : "- Una lista corta de bloqueos concretos.",
-    "- Proximo entregable con fecha realista."
+    "- Próximo entregable con fecha realista."
   ];
-  return `Para la reunion de ${formatMeetingLabel(nextMeeting)} yo llevaria esto:
+  return `Para la reunión de ${formatMeetingLabel(nextMeeting)} yo llevaría esto:
 ${lines.join("\n")}`;
 }
 
@@ -1953,9 +2094,9 @@ function buildChapterAdvice(chapter) {
   const openCheck = chapter.checklist.find((item) => !item.done);
   const lines = [
     `- Estado actual: ${chapter.status} y ${chapter.progress}% de progreso.`,
-    `- Siguiente movimiento recomendado: ${nextSection ? `trabajar la seccion "${nextSection.title}"` : "cerrar una seccion concreta"}.`,
-    `- Control de calidad: ${openCheck ? openCheck.label : "el checklist esta bastante bien cubierto"}.`,
-    "- Consejo practico: no abras mas frentes; intenta dejar hoy una decision cerrada o un parrafo completo."
+    `- Siguiente movimiento recomendado: ${nextSection ? `trabajar la sección "${nextSection.title}"` : "cerrar una sección concreta"}.`,
+    `- Control de calidad: ${openCheck ? openCheck.label : "el checklist está bastante bien cubierto"}.`,
+    "- Consejo práctico: no abras más frentes; intenta dejar hoy una decisión cerrada o un párrafo completo."
   ];
   return `Sobre ${chapter.title}:\n${lines.join("\n")}`;
 }
@@ -1963,8 +2104,8 @@ function buildChapterAdvice(chapter) {
 function createMeetingFromPrompt(message) {
   const date = extractDateFromText(message);
   const time = extractTimeFromText(message);
-  if (!date) return { reply: "Puedo agendarla, pero me falta la fecha. Prueba: Agendar reunion el viernes a las 16:00 con directora sobre metodologia." };
-  if (!time) return { reply: "Puedo crear la reunion, pero me falta la hora. Prueba: Agendar reunion el viernes a las 16:00 con directora sobre metodologia." };
+  if (!date) return { reply: "Puedo agendarla, pero me falta la fecha. Prueba: Agendar reunión el viernes a las 16:00 con directora sobre metodología." };
+  if (!time) return { reply: "Puedo crear la reunión, pero me falta la hora. Prueba: Agendar reunión el viernes a las 16:00 con directora sobre metodología." };
   const attendees = extractAttendees(message);
   const agenda = extractTopic(message) || "Seguimiento de tesis";
   const type = inferMeetingType(attendees, agenda);
@@ -1980,14 +2121,14 @@ function createMeetingFromPrompt(message) {
     next: ""
   });
   return {
-    reply: `Listo. He agendado una reunion para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. La he guardado en Reuniones y revision.`,
-    toastMessage: "Reunion creada desde el asistente"
+    reply: `Listo. He agendado una reunión para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. La he guardado en Reuniones y revisión.`,
+    toastMessage: "Reunión creada desde el asistente"
   };
 }
 
 function createTaskFromPrompt(message) {
   const title = extractTaskTitle(message);
-  if (!title) return { reply: "Puedo crear la tarea, pero necesito una accion concreta. Ejemplo: Crear tarea enviar borrador del capitulo 2 para manana." };
+  if (!title) return { reply: "Puedo crear la tarea, pero necesito una acción concreta. Ejemplo: Crear tarea enviar borrador del capítulo 2 para mañana." };
   const due = extractDateFromText(message);
   const impact = extractImpact(message);
   const effort = extractEffort(message);
@@ -2003,7 +2144,7 @@ function createTaskFromPrompt(message) {
     impact
   });
   return {
-    reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Despues"}.`,
+    reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Después"}.`,
     toastMessage: "Tarea creada desde el asistente"
   };
 }
@@ -2011,14 +2152,14 @@ function createTaskFromPrompt(message) {
 function createReviewCommentFromPrompt(message) {
   const chapter = findChapterFromPrompt(message);
   const commentText = extractFreeText(message, ["comentario", "registrar comentario", "anade comentario", "agrega comentario"]);
-  if (!commentText) return { reply: "Puedo registrar el comentario, pero necesito el texto. Ejemplo: Registrar comentario del director en capitulo 2: falta justificar la muestra." };
+  if (!commentText) return { reply: "Puedo registrar el comentario, pero necesito el texto. Ejemplo: Registrar comentario del director en capítulo 2: falta justificar la muestra." };
 
   const source = inferCommentSource(message);
   const priority = inferCommentPriority(message);
   const due = extractDateFromText(message);
   state.reviewComments.unshift({
     id: createId("rv"),
-    chapter: chapter ? chapter.title : "Sin capitulo",
+    chapter: chapter ? chapter.title : "Sin capítulo",
     source,
     comment: commentText,
     response: "Definir respuesta y criterio de cierre.",
@@ -2036,12 +2177,12 @@ function createReviewCommentFromPrompt(message) {
 function createChapterNoteFromPrompt(message) {
   const chapter = findChapterFromPrompt(message);
   if (!chapter) {
-    return { reply: "Puedo guardar la nota, pero necesito que me digas a que capitulo pertenece. Ejemplo: Anade nota al capitulo 1: abrir la introduccion con el problema de investigacion." };
+    return { reply: "Puedo guardar la nota, pero necesito que me digas a qué capítulo pertenece. Ejemplo: Añade nota al capítulo 1: abrir la introducción con el problema de investigación." };
   }
 
   const text = extractFreeText(message, ["nota", "anade nota", "agrega nota", "registrar nota"]);
   if (!text) {
-    return { reply: "Puedo guardar la nota, pero me falta el contenido. Ejemplo: Anade nota al capitulo 1: reforzar el cierre de la seccion teorica." };
+    return { reply: "Puedo guardar la nota, pero me falta el contenido. Ejemplo: Añade nota al capítulo 1: reforzar el cierre de la sección teórica." };
   }
 
   chapter.notes.unshift({
@@ -2069,8 +2210,8 @@ function recommendNextMove() {
     .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0];
   if (urgentTask) return `terminar la tarea ${urgentTask.title}`;
   const chapter = nextChapterToPush();
-  if (chapter) return `empujar ${chapter.title} y cerrar una seccion concreta`;
-  return "crear el primer capitulo y planificar tres tareas para esta semana";
+  if (chapter) return `empujar ${chapter.title} y cerrar una sección concreta`;
+  return "crear el primer capítulo y planificar tres tareas para esta semana";
 }
 
 function nextChapterToPush() {
@@ -2131,10 +2272,10 @@ function extractTopic(text) {
 
 function inferMeetingType(attendees, agenda) {
   const normalized = normalizeUserText(`${attendees} ${agenda}`);
-  if (normalized.includes("director") || normalized.includes("directora")) return "Direccion";
-  if (normalized.includes("comite")) return "Comite";
+  if (normalized.includes("director") || normalized.includes("directora")) return "Dirección";
+  if (normalized.includes("comite")) return "Comité";
   if (normalized.includes("grupo")) return "Grupo";
-  return "Revision interna";
+  return "Revisión interna";
 }
 
 function extractTaskTitle(text) {
@@ -2171,15 +2312,15 @@ function inferNoteType(text) {
   const normalized = normalizeUserText(text);
   if (normalized.includes("riesgo")) return "Riesgo";
   if (normalized.includes("fuente") || normalized.includes("referencia")) return "Fuente";
-  if (normalized.includes("decision")) return "Decision";
+  if (normalized.includes("decision")) return "Decisión";
   return "Idea";
 }
 
 function inferCommentSource(text) {
   const normalized = normalizeUserText(text);
-  if (normalized.includes("director") || normalized.includes("directora")) return "Direccion";
-  if (normalized.includes("comite") || normalized.includes("comite")) return "Comite";
-  return "Direccion";
+  if (normalized.includes("director") || normalized.includes("directora")) return "Dirección";
+  if (normalized.includes("comite") || normalized.includes("comite")) return "Comité";
+  return "Dirección";
 }
 
 function inferCommentPriority(text) {
@@ -2206,7 +2347,7 @@ function extractEffort(text) {
 function inferTaskArea(text) {
   const normalized = normalizeUserText(text);
   if (normalized.includes("capitulo") || normalized.includes("borrador") || normalized.includes("escribir")) return "Capítulos";
-  if (normalized.includes("comentario") || normalized.includes("revision")) return "Revision";
+  if (normalized.includes("comentario") || normalized.includes("revision")) return "Revisión";
   if (normalized.includes("lectura") || normalized.includes("fuente")) return "Lecturas";
   if (normalized.includes("reunion")) return "Reuniones";
   return "General";
@@ -2271,7 +2412,7 @@ function taskCard(task) {
   const nextStatuses = [
     { id: "today", label: "Hoy" },
     { id: "week", label: "Semana" },
-    { id: "later", label: "Despues" }
+    { id: "later", label: "Después" }
   ].filter((item) => item.id !== task.status);
 
   return `
@@ -2351,7 +2492,7 @@ function selectField(label, name, options, selected = options[0]) {
 }
 
 function chapterSelect(label, name) {
-  const options = ["Sin capitulo", ...state.chapters.map((chapter) => chapter.title)];
+  const options = ["Sin capítulo", ...state.chapters.map((chapter) => chapter.title)];
   return selectField(label, name, options);
 }
 
@@ -2360,7 +2501,7 @@ function emptyState(text) {
 }
 
 function statusPill(status) {
-  const normalized = String(status || "").toLowerCase();
+  const normalized = normalizeUserText(status);
   let className = "";
   if (normalized.includes("aprob") || normalized.includes("complet") || normalized.includes("leido") || normalized.includes("clave") || normalized.includes("resuelto") || normalized.includes("limpio") || normalized.includes("codificado") || normalized.includes("analizado")) className = "done";
   if (normalized.includes("revision") || normalized.includes("curso") || normalized.includes("leyendo") || normalized.includes("proceso")) className = "review";
@@ -2391,7 +2532,7 @@ function qualityProgress(chapter) {
 }
 
 function generateMeetingEmail(meeting) {
-  return `Hola,\n\nDejo por escrito el resumen de la reunion del ${formatDate(meeting.date)}.\n\nAgenda:\n${meeting.agenda}\n\nDecisiones tomadas:\n${meeting.decisions}\n\nTareas acordadas:\n${meeting.tasks}\n\nProxima reunion: ${formatDate(meeting.next)}.\n\nGracias.`;
+  return `Hola,\n\nDejo por escrito el resumen de la reunión del ${formatDate(meeting.date)}.\n\nAgenda:\n${meeting.agenda}\n\nDecisiones tomadas:\n${meeting.decisions}\n\nTareas acordadas:\n${meeting.tasks}\n\nPróxima reunión: ${formatDate(meeting.next)}.\n\nGracias.`;
 }
 
 function generateWritingPlan() {
@@ -2400,16 +2541,16 @@ function generateWritingPlan() {
     .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
 
   if (!nextChapter) {
-    return "Todos los capitulos registrados han alcanzado su objetivo de palabras. Dedica la semana a revision, citas y coherencia global.";
+    return "Todos los capítulos registrados han alcanzado su objetivo de palabras. Dedica la semana a revisión, citas y coherencia global.";
   }
 
   const remaining = Math.max(0, Number(nextChapter.target || 0) - Number(nextChapter.words || 0));
   const daily = Math.ceil(remaining / 10);
-  return `Capitulo prioritario: ${nextChapter.title}
+  return `Capítulo prioritario: ${nextChapter.title}
 Palabras pendientes aproximadas: ${formatNumber(remaining)}
-Plan de 10 sesiones: ${formatNumber(daily)} palabras por sesion
-Primera sesion: escribir solo el parrafo puente que conecte objetivo, argumento y fuentes
-Criterio de cierre: terminar con una decision visible, no con mas lecturas pendientes`;
+Plan de 10 sesiones: ${formatNumber(daily)} palabras por sesión
+Primera sesión: escribir solo el párrafo puente que conecte objetivo, argumento y fuentes
+Criterio de cierre: terminar con una decisión visible, no con más lecturas pendientes`;
 }
 
 function writingWordsLastDays(days) {
@@ -2447,7 +2588,7 @@ function nextDueLabel() {
   const candidates = [
     ...state.tasks.map((task) => ({ label: task.title, due: task.due })),
     ...state.chapters.map((chapter) => ({ label: chapter.title, due: chapter.due })),
-    ...state.meetings.map((meeting) => ({ label: "Reunion", due: meeting.next })),
+    ...state.meetings.map((meeting) => ({ label: "Reunión", due: meeting.next })),
     ...state.reviewComments.map((comment) => ({ label: comment.chapter, due: comment.due }))
   ].filter((item) => item.due);
   if (!candidates.length) return "-";
@@ -2455,7 +2596,21 @@ function nextDueLabel() {
   return formatDate(next.due);
 }
 
-function exportData() {
+async function exportData() {
+  if (API_ENABLED && auth.user) {
+    try {
+      const response = await fetch("/api/backup", { credentials: "same-origin" });
+      if (response.ok) {
+        const blob = await response.blob();
+        downloadBlob("doctoral-os-backup.json", blob);
+        showToast("Respaldo exportado desde el servidor");
+        return;
+      }
+    } catch (error) {
+      console.warn("No se pudo descargar el respaldo del servidor", error);
+    }
+  }
+
   downloadText("doctoral-os-respaldo.json", JSON.stringify({ state, exportedAt: new Date().toISOString() }, null, 2), "application/json");
   showToast("Respaldo exportado");
 }
@@ -2480,6 +2635,10 @@ function importData(event) {
 
 function downloadText(filename, content, type) {
   const blob = new Blob([content], { type });
+  downloadBlob(filename, blob);
+}
+
+function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

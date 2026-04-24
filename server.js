@@ -14,6 +14,10 @@ const MAX_BODY = 2 * 1024 * 1024;
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const ASSISTANT_THREAD_LIMIT = 16;
+const SESSION_COOKIE = "doctoral_os_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const rateLimitStore = new Map();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -23,6 +27,18 @@ const contentTypes = {
   ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8"
 };
+
+const PUBLIC_FILES = new Set([
+  "/landing.html",
+  "/index.html",
+  "/pricing.html",
+  "/help.html",
+  "/privacy.html",
+  "/terms.html",
+  "/security.html",
+  "/styles.css",
+  "/app.js"
+]);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = openDatabase();
@@ -99,7 +115,9 @@ function migrateLegacyJson(database) {
 }
 
 async function handleApi(req, res) {
-  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+  const { pathname } = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+
+  if (!assertTrustedOrigin(req, res)) return;
 
   if (req.method === "GET" && pathname === "/api/health") {
     sendJson(res, 200, { ok: true, storage: "sqlite" });
@@ -107,13 +125,14 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/api/register") {
+    if (!enforceRateLimit(req, res, "register", 8)) return;
     const body = await readJson(req);
     const email = normalizeEmail(body.email);
     const password = String(body.password || "");
     const name = String(body.name || "").trim() || email.split("@")[0];
 
     if (!isValidEmail(email) || password.length < 8) {
-      sendJson(res, 400, { error: "Usa un email valido y una contrasena de al menos 8 caracteres." });
+      sendJson(res, 400, { error: "Usa un email válido y una contraseña de al menos 8 caracteres." });
       return;
     }
 
@@ -128,43 +147,49 @@ async function handleApi(req, res) {
     insertSession(session);
     saveUserState(user.id, {});
 
-    sendJson(res, 201, { ...publicSessionPayload(user, session.token), state: {}, isNewUser: true });
+    sendJson(res, 201, { ...publicSessionPayload(user), state: {}, isNewUser: true }, {
+      "Set-Cookie": buildSessionCookie(req, session.token, session.expires_at)
+    });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
+    if (!enforceRateLimit(req, res, "login", 12)) return;
     const body = await readJson(req);
     const email = normalizeEmail(body.email);
     const password = String(body.password || "");
     const user = findUserByEmail(email);
 
     if (!user || !verifyPassword(password, user.password_hash)) {
-      sendJson(res, 401, { error: "Email o contrasena incorrectos." });
+      sendJson(res, 401, { error: "Email o contraseña incorrectos." });
       return;
     }
 
     const session = createSession(user.id);
     insertSession(session);
     pruneSessions();
-    sendJson(res, 200, { ...publicSessionPayload(user, session.token), state: getUserState(user.id) });
+    sendJson(res, 200, { ...publicSessionPayload(user), state: getUserState(user.id) }, {
+      "Set-Cookie": buildSessionCookie(req, session.token, session.expires_at)
+    });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/logout") {
-    const token = getBearerToken(req);
+    const token = getSessionToken(req);
     if (token) db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, { ok: true }, { "Set-Cookie": clearSessionCookie(req) });
     return;
   }
 
   if (req.method === "GET" && pathname === "/api/me") {
     const auth = requireUser(req, res);
     if (!auth) return;
-    sendJson(res, 200, { ...publicSessionPayload(auth.user, auth.token), state: getUserState(auth.user.id) });
+    sendJson(res, 200, { ...publicSessionPayload(auth.user), state: getUserState(auth.user.id) });
     return;
   }
 
   if (req.method === "PUT" && pathname === "/api/state") {
+    if (!enforceRateLimit(req, res, "state", 240)) return;
     const auth = requireUser(req, res);
     if (!auth) return;
     const body = await readJson(req);
@@ -175,6 +200,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/api/assistant") {
+    if (!enforceRateLimit(req, res, "assistant", 60)) return;
     const auth = requireUser(req, res);
     if (!auth) return;
     const body = await readJson(req);
@@ -184,7 +210,7 @@ async function handleApi(req, res) {
       return;
     }
     if (!process.env.OPENAI_API_KEY) {
-      sendJson(res, 503, { error: "El asistente IA todavia no esta configurado en el servidor." });
+      sendJson(res, 503, { error: "El asistente IA todavía no está configurado en el servidor." });
       return;
     }
 
@@ -207,14 +233,17 @@ async function handleApi(req, res) {
     if (!auth) return;
     const payload = JSON.stringify({ user: publicUser(auth.user), state: getUserState(auth.user.id), exportedAt: new Date().toISOString() }, null, 2);
     res.writeHead(200, {
+      ...securityHeaders(req),
       "Content-Type": "application/json; charset=utf-8",
-      "Content-Disposition": "attachment; filename=\"doctoral-os-backup.json\""
+      "Content-Disposition": "attachment; filename=\"doctoral-os-backup.json\"",
+      "Cache-Control": "no-store"
     });
     res.end(payload);
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/change-password") {
+    if (!enforceRateLimit(req, res, "change-password", 10)) return;
     const auth = requireUser(req, res);
     if (!auth) return;
     const body = await readJson(req);
@@ -222,11 +251,11 @@ async function handleApi(req, res) {
     const newPassword = String(body.newPassword || "");
 
     if (!verifyPassword(currentPassword, auth.user.password_hash)) {
-      sendJson(res, 403, { error: "La contrasena actual no es correcta." });
+      sendJson(res, 403, { error: "La contraseña actual no es correcta." });
       return;
     }
     if (newPassword.length < 8) {
-      sendJson(res, 400, { error: "La nueva contrasena debe tener al menos 8 caracteres." });
+      sendJson(res, 400, { error: "La nueva contraseña debe tener al menos 8 caracteres." });
       return;
     }
 
@@ -241,53 +270,177 @@ async function handleApi(req, res) {
 }
 
 function serveStatic(req, res) {
-  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+  const { pathname } = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+  if (!["GET", "HEAD"].includes(req.method)) {
+    res.writeHead(405, {
+      ...securityHeaders(req),
+      "Allow": "GET, HEAD",
+      "Content-Type": "text/plain; charset=utf-8"
+    });
+    res.end("Method Not Allowed");
+    return;
+  }
+
   const routeMap = {
     "/": "/landing.html",
     "/app": "/index.html",
-    "/app/": "/index.html"
+    "/app/": "/index.html",
+    "/pricing": "/pricing.html",
+    "/help": "/help.html",
+    "/privacy": "/privacy.html",
+    "/terms": "/terms.html",
+    "/security": "/security.html"
   };
   const requested = routeMap[pathname] || decodeURIComponent(pathname);
-  const filePath = path.normalize(path.join(ROOT, requested));
 
-  if (!filePath.startsWith(ROOT) || filePath.includes(`${path.sep}data${path.sep}`)) {
-    res.writeHead(403, securityHeaders());
+  if (!PUBLIC_FILES.has(requested)) {
+    res.writeHead(404, securityHeaders(req));
+    res.end("Not found");
+    return;
+  }
+
+  const filePath = path.normalize(path.join(ROOT, requested));
+  if (!filePath.startsWith(ROOT)) {
+    res.writeHead(403, securityHeaders(req));
     res.end("Forbidden");
     return;
   }
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
-      res.writeHead(404, securityHeaders());
+      res.writeHead(404, securityHeaders(req));
       res.end("Not found");
       return;
     }
 
     res.writeHead(200, {
-      ...securityHeaders(),
+      ...securityHeaders(req),
       "Content-Type": contentTypes[path.extname(filePath)] || "application/octet-stream",
       "Cache-Control": "no-store"
     });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
     res.end(content);
   });
 }
 
+function clientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket.remoteAddress || "local";
+}
+
+function cleanupRateLimitStore(now = Date.now()) {
+  if (rateLimitStore.size < 500) return;
+  for (const [key, value] of rateLimitStore.entries()) {
+    if (!value || value.resetAt <= now) rateLimitStore.delete(key);
+  }
+}
+
+function enforceRateLimit(req, res, scope, limit, windowMs = RATE_LIMIT_WINDOW_MS) {
+  cleanupRateLimitStore();
+  const now = Date.now();
+  const key = scope + ":" + clientIp(req);
+  const current = rateLimitStore.get(key);
+  const bucket = !current || current.resetAt <= now
+    ? { count: 0, resetAt: now + windowMs }
+    : current;
+
+  bucket.count += 1;
+  rateLimitStore.set(key, bucket);
+
+  if (bucket.count > limit) {
+    const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+    sendJson(res, 429, { error: "Demasiadas solicitudes. Espera un momento antes de volver a intentarlo." }, {
+      "Retry-After": String(retryAfter)
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function isSecureRequest(req) {
+  const forwarded = String(req && req.headers && req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  return Boolean(req && req.socket && req.socket.encrypted) || forwarded === "https";
+}
+
+function assertTrustedOrigin(req, res) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return true;
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return true;
+
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = forwardedHost || String(req.headers.host || "").trim();
+  if (!host) return true;
+
+  const expected = (isSecureRequest(req) ? "https" : "http") + "://" + host;
+  if (origin !== expected) {
+    sendJson(res, 403, { error: "Origen no permitido." });
+    return false;
+  }
+
+  return true;
+}
+
+function parseCookies(req) {
+  const raw = String(req.headers.cookie || "");
+  return raw.split(";").reduce((acc, part) => {
+    const [name, ...rest] = part.trim().split("=");
+    if (!name) return acc;
+    acc[name] = decodeURIComponent(rest.join("=") || "");
+    return acc;
+  }, {});
+}
+
+function buildSessionCookie(req, token, expiresAt) {
+  const cookie = [
+    SESSION_COOKIE + "=" + encodeURIComponent(token),
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=" + SESSION_TTL_SECONDS
+  ];
+  if (expiresAt) cookie.push("Expires=" + new Date(expiresAt).toUTCString());
+  if (isSecureRequest(req)) cookie.push("Secure");
+  return cookie.join("; ");
+}
+
+function clearSessionCookie(req) {
+  const cookie = [
+    SESSION_COOKIE + "=",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+  ];
+  if (isSecureRequest(req)) cookie.push("Secure");
+  return cookie.join("; ");
+}
+
+function getSessionToken(req) {
+  const cookies = parseCookies(req);
+  return cookies[SESSION_COOKIE] || getBearerToken(req);
+}
+
 function requireUser(req, res) {
-  const token = getBearerToken(req);
+  const token = getSessionToken(req);
   if (!token) {
-    sendJson(res, 401, { error: "Sesion requerida." });
+    sendJson(res, 401, { error: "Sesión requerida." }, { "Set-Cookie": clearSessionCookie(req) });
     return null;
   }
 
   const session = db.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > ?").get(token, new Date().toISOString());
   if (!session) {
-    sendJson(res, 401, { error: "Sesion caducada." });
+    sendJson(res, 401, { error: "Sesión caducada." }, { "Set-Cookie": clearSessionCookie(req) });
     return null;
   }
 
   const user = findUserById(session.user_id);
   if (!user) {
-    sendJson(res, 401, { error: "Usuario no encontrado." });
+    sendJson(res, 401, { error: "Usuario no encontrado." }, { "Set-Cookie": clearSessionCookie(req) });
     return null;
   }
 
@@ -315,17 +468,30 @@ function readJson(req) {
   });
 }
 
-function sendJson(res, status, payload) {
-  res.writeHead(status, { ...securityHeaders(), "Content-Type": "application/json; charset=utf-8" });
+function sendJson(res, status, payload, extraHeaders = {}) {
+  res.writeHead(status, {
+    ...securityHeaders(res.req),
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...extraHeaders
+  });
   res.end(JSON.stringify(payload));
 }
 
-function securityHeaders() {
-  return {
+function securityHeaders(req) {
+  const headers = {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin"
   };
+  if (isSecureRequest(req)) {
+    headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+  }
+  return headers;
 }
 
 function createUser(email, password, name) {
@@ -412,8 +578,8 @@ function pruneSessions() {
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(new Date().toISOString());
 }
 
-function publicSessionPayload(user, token) {
-  return { token, user: publicUser(user) };
+function publicSessionPayload(user) {
+  return { user: publicUser(user) };
 }
 
 function publicUser(user) {
@@ -427,7 +593,7 @@ function publicUser(user) {
 
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
+  const match = header.match(/^Bearers+(.+)$/i);
   return match ? match[1] : "";
 }
 
@@ -484,7 +650,7 @@ async function runAssistantWithOpenAI(user, state, message) {
   for (let step = 0; step < 4; step += 1) {
     const calls = extractFunctionCalls(response);
     if (!calls.length) {
-      const reply = extractAssistantText(response) || "Puedo ayudarte mejor si me pides una accion concreta o una duda de tesis.";
+      const reply = extractAssistantText(response) || "Puedo ayudarte mejor si me pides una acción concreta o una duda de tesis.";
       assistantState.assistantThread.push(createAssistantMessage("assistant", reply));
       assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
       return { reply, state: assistantState, model: response.model || OPENAI_MODEL };
@@ -503,7 +669,7 @@ async function runAssistantWithOpenAI(user, state, message) {
     });
   }
 
-  const fallbackReply = "He intentado procesarlo, pero necesito que reformules la peticion en una sola accion concreta.";
+  const fallbackReply = "He intentado procesarlo, pero necesito que reformules la petición en una sola acción concreta.";
   assistantState.assistantThread.push(createAssistantMessage("assistant", fallbackReply));
   assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
   return { reply: fallbackReply, state: assistantState, model: OPENAI_MODEL };
@@ -521,7 +687,7 @@ async function openAIResponsesCreate(payload) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = data && data.error && data.error.message ? data.error.message : "OpenAI devolvio " + response.status;
+    const message = data && data.error && data.error.message ? data.error.message : "OpenAI devolvió " + response.status;
     throw new Error(message);
   }
   return data;
@@ -531,9 +697,9 @@ function buildAssistantPrompt(user, state) {
   const context = buildAssistantContext(state);
   return [
     "Eres el asistente de DoctoralOS, una app SaaS para doctorandos individuales.",
-    "Responde siempre en espanol, con tono claro, practico y breve.",
+    "Responde siempre en español, con tono claro, práctico y breve.",
     "Tu trabajo es ayudar a terminar la tesis con menos caos.",
-    "Si el usuario pide crear una tarea o agendar una reunion dentro de la app, usa las herramientas disponibles.",
+    "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
     "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
     "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
     "Si no hace falta herramienta, responde con consejo accionable y concreto.",
@@ -612,9 +778,9 @@ function assistantTools() {
         type: "object",
         additionalProperties: false,
         properties: {
-          title: { type: "string", description: "Titulo claro de la tarea." },
+          title: { type: "string", description: "Título claro de la tarea." },
           due: { type: "string", description: "Fecha limite en formato YYYY-MM-DD o cadena vacia si no hay fecha." },
-          area: { type: "string", description: "Area de trabajo, por ejemplo Capitulos, Revision, Lecturas, Reuniones o General." },
+          area: { type: "string", description: "Área de trabajo, por ejemplo Capítulos, Revisión, Lecturas, Reuniones o General." },
           status: { type: "string", enum: ["today", "week", "later"], description: "Columna del tablero." },
           effort: { type: "string", description: "Esfuerzo estimado, por ejemplo 45 min o 2 h." },
           impact: { type: "string", enum: ["Bajo", "Medio", "Alto"], description: "Impacto esperado." }
@@ -625,15 +791,15 @@ function assistantTools() {
     {
       type: "function",
       name: "create_meeting",
-      description: "Agenda una reunion dentro de DoctoralOS.",
+      description: "Agenda una reunión dentro de DoctoralOS.",
       strict: true,
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          date: { type: "string", description: "Fecha de la reunion en formato YYYY-MM-DD." },
-          time: { type: "string", description: "Hora de la reunion en formato HH:MM de 24 horas." },
-          type: { type: "string", description: "Tipo de reunion, por ejemplo Direccion, Comite, Grupo o Revision interna." },
+          date: { type: "string", description: "Fecha de la reunión en formato YYYY-MM-DD." },
+          time: { type: "string", description: "Hora de la reunión en formato HH:MM de 24 horas." },
+          type: { type: "string", description: "Tipo de reunión, por ejemplo Dirección, Comité, Grupo o Revisión interna." },
           attendees: { type: "string", description: "Personas asistentes." },
           agenda: { type: "string", description: "Tema o agenda principal." }
         },
@@ -643,14 +809,14 @@ function assistantTools() {
     {
       type: "function",
       name: "create_review_comment",
-      description: "Registra un comentario de revision dentro de DoctoralOS.",
+      description: "Registra un comentario de revisión dentro de DoctoralOS.",
       strict: true,
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          chapter: { type: "string", description: "Titulo del capitulo o 'Sin capitulo'." },
-          source: { type: "string", description: "Origen del comentario, por ejemplo Direccion o Comite." },
+          chapter: { type: "string", description: "Título del capítulo o 'Sin capítulo'." },
+          source: { type: "string", description: "Origen del comentario, por ejemplo Dirección o Comité." },
           comment: { type: "string", description: "Comentario a registrar." },
           response: { type: "string", description: "Respuesta o plan de respuesta inicial." },
           status: { type: "string", description: "Estado del comentario, por ejemplo Pendiente o En proceso." },
@@ -663,15 +829,15 @@ function assistantTools() {
     {
       type: "function",
       name: "create_chapter_note",
-      description: "Guarda una nota interna asociada a un capitulo existente de DoctoralOS.",
+      description: "Guarda una nota interna asociada a un capítulo existente de DoctoralOS.",
       strict: true,
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          chapter: { type: "string", description: "Titulo del capitulo donde guardar la nota." },
-          title: { type: "string", description: "Titulo corto de la nota." },
-          type: { type: "string", description: "Tipo de nota, por ejemplo Idea, Decision, Riesgo o Fuente." },
+          chapter: { type: "string", description: "Título del capítulo donde guardar la nota." },
+          title: { type: "string", description: "Título corto de la nota." },
+          type: { type: "string", description: "Tipo de nota, por ejemplo Idea, Decisión, Riesgo o Fuente." },
           date: { type: "string", description: "Fecha de la nota en formato YYYY-MM-DD o cadena vacia." },
           text: { type: "string", description: "Contenido de la nota." }
         },
@@ -713,7 +879,7 @@ function executeAssistantTool(state, call) {
   if (call.name === "create_task") {
     const title = String(args.title || "").trim();
     const due = normalizeIsoDate(args.due);
-    if (!title) return { ok: false, error: "La tarea necesita un titulo." };
+    if (!title) return { ok: false, error: "La tarea necesita un título." };
     if (args.due && !due) return { ok: false, error: "La fecha de la tarea debe ir en formato YYYY-MM-DD." };
 
     const task = {
@@ -732,14 +898,14 @@ function executeAssistantTool(state, call) {
   if (call.name === "create_meeting") {
     const date = normalizeIsoDate(args.date);
     const time = normalizeTime(args.time);
-    if (!date) return { ok: false, error: "La reunion necesita una fecha valida YYYY-MM-DD." };
-    if (!time) return { ok: false, error: "La reunion necesita una hora valida HH:MM." };
+    if (!date) return { ok: false, error: "La reunión necesita una fecha válida YYYY-MM-DD." };
+    if (!time) return { ok: false, error: "La reunión necesita una hora válida HH:MM." };
 
     const meeting = {
       id: createEntityId("mt"),
       date,
       time,
-      type: String(args.type || "Direccion").trim() || "Direccion",
+      type: String(args.type || "Dirección").trim() || "Dirección",
       attendees: String(args.attendees || "").trim(),
       agenda: String(args.agenda || "Seguimiento de tesis").trim() || "Seguimiento de tesis",
       decisions: "",
@@ -754,8 +920,8 @@ function executeAssistantTool(state, call) {
     const due = normalizeIsoDate(args.due);
     const reviewComment = {
       id: createEntityId("rv"),
-      chapter: String(args.chapter || "Sin capitulo").trim() || "Sin capitulo",
-      source: String(args.source || "Direccion").trim() || "Direccion",
+      chapter: String(args.chapter || "Sin capítulo").trim() || "Sin capítulo",
+      source: String(args.source || "Dirección").trim() || "Dirección",
       comment: String(args.comment || "").trim(),
       response: String(args.response || "Definir respuesta y criterio de cierre.").trim() || "Definir respuesta y criterio de cierre.",
       status: String(args.status || "Pendiente").trim() || "Pendiente",
@@ -769,7 +935,7 @@ function executeAssistantTool(state, call) {
 
   if (call.name === "create_chapter_note") {
     const chapter = findChapterByTitle(state.chapters, args.chapter);
-    if (!chapter) return { ok: false, error: "No he encontrado ese capitulo para guardar la nota." };
+    if (!chapter) return { ok: false, error: "No he encontrado ese capítulo para guardar la nota." };
     const date = normalizeIsoDate(args.date) || new Date().toISOString().slice(0, 10);
     const note = {
       id: createEntityId("nt"),
