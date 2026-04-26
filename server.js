@@ -30,7 +30,13 @@ const contentTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8"
+  ".txt": "text/plain; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".gif": "image/gif"
 };
 
 const PUBLIC_FILES = new Set([
@@ -44,6 +50,8 @@ const PUBLIC_FILES = new Set([
   "/styles.css",
   "/app.js"
 ]);
+
+const PUBLIC_PATH_PREFIXES = ["/assets/"];
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = openDatabase();
@@ -406,7 +414,9 @@ function serveStatic(req, res) {
   };
   const requested = routeMap[pathname] || decodeURIComponent(pathname);
 
-  if (!PUBLIC_FILES.has(requested)) {
+  const isPublicPath = PUBLIC_FILES.has(requested) || PUBLIC_PATH_PREFIXES.some((prefix) => requested.startsWith(prefix));
+
+  if (!isPublicPath) {
     res.writeHead(404, securityHeaders(req));
     res.end("Not found");
     return;
