@@ -412,6 +412,21 @@ function serveStatic(req, res) {
     "/terms": "/terms.html",
     "/security": "/security.html"
   };
+
+  if (pathname === "/robots.txt") {
+    const body = "User-agent: *\nDisallow: /\n";
+    res.writeHead(200, {
+      ...securityHeaders(req),
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    res.end(body);
+    return;
+  }
   const requested = routeMap[pathname] || decodeURIComponent(pathname);
 
   const isPublicPath = PUBLIC_FILES.has(requested) || PUBLIC_PATH_PREFIXES.some((prefix) => requested.startsWith(prefix));
@@ -605,9 +620,12 @@ function securityHeaders(req) {
   const headers = {
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), browsing-topics=()",
     "X-Frame-Options": "DENY",
+    "X-Robots-Tag": "noindex, nofollow, noarchive, noimageindex, nosnippet",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "Origin-Agent-Cluster": "?1",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin"
   };
