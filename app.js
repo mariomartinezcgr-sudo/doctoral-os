@@ -300,6 +300,7 @@ function createInitialOnboardingState(candidate = "Doctorando/a") {
   return {
     active: false,
     completed: false,
+    justCompleted: false,
     dismissed: false,
     step: 1,
     data: {
@@ -333,6 +334,7 @@ function normalizeOnboardingState(onboarding, candidate = "Doctorando/a") {
   const merged = deepMerge(base, onboarding || {});
   merged.active = Boolean(merged.active);
   merged.completed = Boolean(merged.completed);
+  merged.justCompleted = Boolean(merged.justCompleted);
   merged.dismissed = Boolean(merged.dismissed);
   merged.step = clamp(Number(merged.step || 1), 1, ONBOARDING_STEPS.length);
   merged.data.templateChapters = Array.isArray(merged.data.templateChapters)
@@ -801,6 +803,13 @@ function handleOnboardingSubmit(event) {
   event.preventDefault();
   persistOnboardingDraft(form);
 
+  const validationError = validateOnboardingStep();
+  if (validationError) {
+    showToast(validationError);
+    renderOnboardingModal(false);
+    return;
+  }
+
   if (state.onboarding.step < ONBOARDING_STEPS.length) {
     state.onboarding.step += 1;
     renderOnboardingModal();
@@ -861,6 +870,44 @@ function syncOnboardingChapterSelections() {
   if (!planned.includes(state.onboarding.data.commentChapter)) {
     state.onboarding.data.commentChapter = fallback;
   }
+}
+
+function validateOnboardingStep() {
+  const data = state.onboarding.data;
+  const step = state.onboarding.step;
+  if (step === 1) {
+    if (!String(data.thesisName || "").trim()) return "Pon al menos un título operativo para arrancar la tesis.";
+    if (String(data.question || "").trim().length < 12) return "Escribe una pregunta o foco doctoral un poco más concreto para que el sistema tenga contexto.";
+    return "";
+  }
+
+  if (step === 2) {
+    const planned = onboardingPlannedChapterTitles(data);
+    if (planned.length < 2) return "Selecciona o escribe al menos dos capítulos para crear una estructura útil.";
+    return "";
+  }
+
+  if (step === 3) {
+    if (!String(data.focusChapter || "").trim()) return "Elige el capítulo que necesita atención esta semana.";
+    if (String(data.firstTask || "").trim().length < 8) return "Define una tarea semanal más concreta para que el plan arranque bien.";
+    if (!String(data.firstDue || "").trim()) return "Añade una fecha para que la primera semana quede cerrada.";
+    return "";
+  }
+
+  if (step === 4) {
+    if (data.setupType === "meeting") {
+      if (!String(data.meetingDate || "").trim()) return "Pon una fecha para la primera reunión.";
+      if (!String(data.meetingWith || "").trim()) return "Indica con quién es la reunión para dejarla bien registrada.";
+      if (!String(data.meetingTopic || "").trim()) return "Añade el tema principal de la reunión.";
+      return "";
+    }
+    if (!String(data.commentChapter || "").trim()) return "Elige el capítulo afectado por el comentario.";
+    if (String(data.commentText || "").trim().length < 12) return "Escribe el comentario o bloqueo con algo más de detalle.";
+    if (!String(data.commentDue || "").trim()) return "Añade una fecha para responder ese comentario.";
+    return "";
+  }
+
+  return "";
 }
 
 function onboardingPlannedChapterTitles(data = state.onboarding.data) {
@@ -971,10 +1018,21 @@ function renderOnboardingPreview(step) {
     3: "La tarea de esta semana debería poder cerrarse en menos de dos sesiones largas de trabajo.",
     4: "Una reunión o un comentario visible convierten la revisión en trabajo accionable dentro del sistema."
   };
+  const outcomes = [
+    `Tesis lista como proyecto: ${data.thesisName || "Mi tesis doctoral"}`,
+    plannedChapters.length ? `${plannedChapters.length} capítulos iniciales preparados` : "Estructura mínima de capítulos lista",
+    data.firstTask ? "Primera semana convertida en una tarea cerrable" : "Primera semana lista para aterrizarse",
+    data.setupType === "meeting" ? "Primera reunión registrada con contexto" : "Primer comentario visible dentro del flujo"
+  ];
   return `
     <article class="card onboarding-preview-card">
       <p class="card-kicker">Vista previa</p>
       <h3>${escapeHtml(data.thesisName || "Mi tesis doctoral")}</h3>
+      <div class="onboarding-preview-meta">
+        <span>4 pasos</span>
+        <span>3-5 minutos</span>
+        <span>Guardado automático</span>
+      </div>
       <div class="onboarding-preview-stack">
         <div>
           <strong>Capítulos iniciales</strong>
@@ -988,6 +1046,12 @@ function renderOnboardingPreview(step) {
           <strong>Próxima conversación</strong>
           <span>${escapeHtml(activeSetup)}</span>
         </div>
+      </div>
+      <div class="onboarding-outcome-list">
+        <strong>Al terminar tendrás</strong>
+        <ul>
+          ${outcomes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
       </div>
       <p class="onboarding-preview-tip">${escapeHtml(tips[step])}</p>
     </article>
@@ -1070,6 +1134,7 @@ function completeOnboarding() {
   }
 
   state.onboarding.completed = true;
+  state.onboarding.justCompleted = true;
   state.onboarding.dismissed = false;
   state.onboarding.active = false;
   state.onboarding.step = ONBOARDING_STEPS.length;
@@ -1077,6 +1142,7 @@ function completeOnboarding() {
   saveState("Sistema doctoral activado");
   onboardingModal.hidden = true;
   render();
+  showToast("Tu sistema doctoral ya está en marcha");
 }
 
 function authModalCopy(mode) {
@@ -1391,6 +1457,13 @@ function handleScreenClick(event) {
       return;
     }
     openOnboarding(Number(target.dataset.step || 1));
+    return;
+  }
+
+  if (action === "dismiss-onboarding-summary") {
+    state.onboarding.justCompleted = false;
+    saveState("");
+    render();
     return;
   }
 
@@ -1961,6 +2034,45 @@ function renderDashboard() {
         <h3>Revisión y cierre</h3>
         <p>Mira comentarios, reunión y asistente para entender cómo se convierte el feedback en acciones.</p>
         <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir revisión</button>
+      </article>
+    </section>
+  ` : state.onboarding.justCompleted ? `
+    <section class="onboarding-success panel">
+      <div class="onboarding-success-copy">
+        <p class="eyebrow">Sistema activado</p>
+        <h2>Ya tienes una primera semana doctoral montada</h2>
+        <p>La estructura, el foco semanal y la primera conversación académica ya están dentro de DoctoralOS. Ahora lo importante es convertir eso en una sesión real de trabajo.</p>
+        <div class="badge-row">
+          <span class="badge teal">${state.chapters.length} capítulos</span>
+          <span class="badge violet">${state.tasks.filter((task) => !task.done).length} tareas activas</span>
+          <span class="badge gold">${state.meetings.length || state.reviewComments.length} conversaciones visibles</span>
+        </div>
+      </div>
+      <div class="onboarding-success-actions">
+        <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Abrir capítulo prioritario</button>
+        <button class="ghost-button" data-action="go" data-view="planner" type="button"><span data-icon="calendar"></span>Revisar semana</button>
+        <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir siguiente paso</button>
+        <button class="subtle-button" data-action="dismiss-onboarding-summary" type="button">Ocultar resumen</button>
+      </div>
+    </section>
+    <section class="onboarding-strip">
+      <article class="is-done">
+        <span class="step-number">1</span>
+        <h3>Tu base ya existe</h3>
+        <p>Título, fase y pregunta ya están visibles dentro del sistema.</p>
+        <button class="tiny-button" data-action="open-onboarding" data-step="1" type="button">Revisar</button>
+      </article>
+      <article class="${state.chapters.length ? "is-done" : ""}">
+        <span class="step-number">2</span>
+        <h3>Estructura inicial creada</h3>
+        <p>Ya tienes capítulos suficientes para empezar a escribir y revisar.</p>
+        <button class="tiny-button" data-action="go" data-view="chapters" type="button">Abrir</button>
+      </article>
+      <article class="${state.tasks.length ? "is-done" : ""}">
+        <span class="step-number">3</span>
+        <h3>Semana aterrizada</h3>
+        <p>Hay una primera tarea cerrable y una fecha visible para esta semana.</p>
+        <button class="tiny-button" data-action="go" data-view="planner" type="button">Abrir</button>
       </article>
     </section>
   ` : state.onboarding.completed ? `
