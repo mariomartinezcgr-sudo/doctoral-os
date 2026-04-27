@@ -13,6 +13,20 @@ const DEFAULT_CHECKLIST_ITEMS = [
   "Pendientes convertidos en tareas"
 ];
 const V1_VIEWS = ["dashboard", "chapters", "literature", "planner", "reviews", "writing", "forum", "assistant"];
+const ONBOARDING_STEPS = [
+  { id: 1, label: "Base", title: "Empecemos por tu tesis" },
+  { id: 2, label: "Estructura", title: "Monta el esqueleto inicial" },
+  { id: 3, label: "Semana", title: "Convierte la tesis en trabajo real" },
+  { id: 4, label: "Revisión", title: "Haz visible la conversación académica" }
+];
+const ONBOARDING_CHAPTER_TEMPLATES = [
+  { title: "Introducción", goal: "Situar el problema, la pregunta y la relevancia del trabajo.", target: 7000 },
+  { title: "Marco teórico", goal: "Conectar la literatura clave y construir el marco conceptual.", target: 10000 },
+  { title: "Metodología", goal: "Justificar diseño, muestra, instrumentos y análisis.", target: 9000 },
+  { title: "Resultados", goal: "Presentar los hallazgos con orden y trazabilidad.", target: 11000 },
+  { title: "Discusión", goal: "Interpretar resultados y conectar con la contribución doctoral.", target: 8500 },
+  { title: "Conclusiones", goal: "Cerrar aportes, límites y siguientes pasos del proyecto.", target: 5000 }
+];
 
 const icons = {
   dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 13h6V4H4v9Z"/><path d="M14 20h6V4h-6v16Z"/><path d="M4 20h6v-3H4v3Z"/></svg>',
@@ -52,6 +66,7 @@ const defaultState = {
   literatureFilter: "",
   literatureCitationId: "",
   literatureCitationStyle: "APA 7",
+  onboarding: createInitialOnboardingState(),
   project: {
     name: "Mi tesis doctoral",
     candidate: "Doctorando/a",
@@ -99,6 +114,15 @@ const authModal = document.querySelector("#authModal");
 const authTitle = document.querySelector("#authTitle");
 const authDescription = document.querySelector("#authDescription");
 const authGrid = document.querySelector("#authGrid");
+const onboardingModal = document.querySelector("#onboardingModal");
+const onboardingDialog = document.querySelector("#onboardingDialog");
+const onboardingTitle = document.querySelector("#onboardingTitle");
+const onboardingDescription = document.querySelector("#onboardingDescription");
+const onboardingProgress = document.querySelector("#onboardingProgress");
+const onboardingBody = document.querySelector("#onboardingBody");
+const onboardingPreview = document.querySelector("#onboardingPreview");
+const onboardingBack = document.querySelector("#onboardingBack");
+const onboardingPrimary = document.querySelector("#onboardingPrimary");
 let authModalMode = "login";
 let pendingResetToken = "";
 
@@ -116,6 +140,8 @@ function init() {
   document.querySelector("#importFile").addEventListener("change", importData);
   authModal.addEventListener("click", handleAuthModalClick);
   authModal.addEventListener("submit", handleAuthSubmit);
+  onboardingModal.addEventListener("click", handleOnboardingModalClick);
+  onboardingModal.addEventListener("submit", handleOnboardingSubmit);
   screen.addEventListener("click", handleScreenClick);
   screen.addEventListener("submit", handleFormSubmit);
   screen.addEventListener("input", handleScreenInput);
@@ -165,6 +191,7 @@ function ensureStateShape(target) {
   target.writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
   target.forumTopics = Array.isArray(target.forumTopics) ? target.forumTopics : [];
   target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
+  target.onboarding = normalizeOnboardingState(target.onboarding, target.project?.candidate);
   target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
   target.literatureCitationStyle = ["APA 7", "MLA 9", "Chicago", "BibTeX"].includes(target.literatureCitationStyle) ? target.literatureCitationStyle : "APA 7";
   target.meetings.forEach((meeting) => {
@@ -244,6 +271,7 @@ function createFreshState(user = {}) {
     literatureFilter: "",
     literatureCitationId: "",
     literatureCitationStyle: "APA 7",
+    onboarding: createInitialOnboardingState(name),
     project: {
       name: "Mi tesis doctoral",
       candidate: name,
@@ -266,6 +294,60 @@ function createFreshState(user = {}) {
     assistantThread: createInitialAssistantThread(),
     analyticsRange: "week"
   });
+}
+
+function createInitialOnboardingState(candidate = "Doctorando/a") {
+  return {
+    active: false,
+    completed: false,
+    dismissed: false,
+    step: 1,
+    data: {
+      thesisName: "Mi tesis doctoral",
+      candidate,
+      program: "",
+      university: "",
+      phase: "Organizando el trabajo",
+      writingTarget: 65000,
+      question: "",
+      chapterMode: "template",
+      templateChapters: ["Introducción", "Marco teórico", "Metodología"],
+      customChapters: "",
+      focusChapter: "Introducción",
+      firstTask: "",
+      firstDue: offsetISODate(7),
+      setupType: "meeting",
+      meetingDate: offsetISODate(7),
+      meetingTime: "10:00",
+      meetingWith: "Directora",
+      meetingTopic: "",
+      commentChapter: "Introducción",
+      commentText: "",
+      commentDue: offsetISODate(7)
+    }
+  };
+}
+
+function normalizeOnboardingState(onboarding, candidate = "Doctorando/a") {
+  const base = createInitialOnboardingState(candidate);
+  const merged = deepMerge(base, onboarding || {});
+  merged.active = Boolean(merged.active);
+  merged.completed = Boolean(merged.completed);
+  merged.dismissed = Boolean(merged.dismissed);
+  merged.step = clamp(Number(merged.step || 1), 1, ONBOARDING_STEPS.length);
+  merged.data.templateChapters = Array.isArray(merged.data.templateChapters)
+    ? merged.data.templateChapters.filter(Boolean)
+    : [...base.data.templateChapters];
+  if (!merged.data.templateChapters.length) {
+    merged.data.templateChapters = [...base.data.templateChapters];
+  }
+  if (!merged.data.focusChapter) {
+    merged.data.focusChapter = onboardingPlannedChapterTitles(merged.data)[0] || "Introducción";
+  }
+  if (!merged.data.commentChapter) {
+    merged.data.commentChapter = onboardingPlannedChapterTitles(merged.data)[0] || "Introducción";
+  }
+  return merged;
 }
 
 function createDemoState() {
@@ -603,6 +685,400 @@ function clearResetQueryParam() {
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 }
 
+function onboardingShouldAutoOpen() {
+  if (!API_ENABLED || demoMode || !auth.user) return false;
+  if (state.onboarding.completed || state.onboarding.dismissed || state.onboarding.active) return false;
+  return !state.chapters.length && !state.tasks.length && !state.meetings.length && !state.reviewComments.length && !state.readings.length && !state.writingLog.length;
+}
+
+function openOnboarding(step = state.onboarding.step || 1, options = {}) {
+  if (requiresAuthenticationWall() || demoMode) return;
+  state.onboarding.active = true;
+  state.onboarding.dismissed = false;
+  state.onboarding.step = clamp(Number(step || 1), 1, ONBOARDING_STEPS.length);
+  renderOnboardingModal(options.focus !== false);
+}
+
+function closeOnboarding(options = {}) {
+  state.onboarding.active = false;
+  if (options.dismiss) state.onboarding.dismissed = true;
+  onboardingModal.hidden = true;
+  if (!options.skipSave) saveState("");
+}
+
+function launchOnboardingIfNeeded() {
+  if (!onboardingShouldAutoOpen()) return;
+  state.onboarding.active = true;
+  renderOnboardingModal();
+}
+
+function renderOnboardingModal(shouldFocus = true) {
+  if (requiresAuthenticationWall() || !state.onboarding.active) {
+    onboardingModal.hidden = true;
+    return;
+  }
+
+  const step = ONBOARDING_STEPS.find((item) => item.id === state.onboarding.step) || ONBOARDING_STEPS[0];
+  onboardingTitle.textContent = step.title;
+  onboardingDescription.textContent = step.id === 1
+    ? "En menos de cinco minutos dejaremos la tesis convertida en un espacio real de trabajo: estructura, semana y primera conversación académica."
+    : step.id === 2
+      ? "No buscamos perfección. Solo una estructura suficiente para empezar a escribir y revisar sin caos."
+      : step.id === 3
+        ? "La tesis se vuelve manejable cuando la próxima semana queda convertida en pocas acciones claras."
+        : "La tesis también avanza cuando las reuniones y comentarios se transforman en decisiones visibles.";
+  onboardingProgress.innerHTML = ONBOARDING_STEPS.map((item) => `
+    <article class="onboarding-progress-step ${item.id === step.id ? "is-current" : item.id < step.id ? "is-done" : ""}">
+      <span>${item.id}</span>
+      <strong>${item.label}</strong>
+    </article>
+  `).join("");
+  onboardingBody.innerHTML = renderOnboardingStepBody(step.id);
+  onboardingPreview.innerHTML = renderOnboardingPreview(step.id);
+  onboardingBack.hidden = step.id === 1;
+  onboardingPrimary.textContent = step.id === ONBOARDING_STEPS.length ? "Activar mi sistema doctoral" : "Continuar";
+  onboardingModal.hidden = false;
+  hydrateIcons(onboardingModal);
+  if (shouldFocus) focusOnboardingField(step.id);
+}
+
+function focusOnboardingField(step) {
+  const selector = {
+    1: "#onboardingThesisName",
+    2: "[name='templateChapters']",
+    3: "#onboardingFocusChapter",
+    4: state.onboarding.data.setupType === "comment" ? "#onboardingCommentText" : "#onboardingMeetingDate"
+  }[step] || "#onboardingThesisName";
+  onboardingDialog.querySelector(selector)?.focus();
+}
+
+function handleOnboardingModalClick(event) {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  const action = button.dataset.action;
+
+  if (action === "onboarding-close") {
+    persistOnboardingDraft();
+    closeOnboarding({ dismiss: true });
+    showToast("Configuración inicial pospuesta");
+    render();
+    return;
+  }
+
+  if (action === "onboarding-back") {
+    persistOnboardingDraft();
+    state.onboarding.step = Math.max(1, state.onboarding.step - 1);
+    renderOnboardingModal();
+    return;
+  }
+
+  if (action === "onboarding-skip") {
+    persistOnboardingDraft();
+    closeOnboarding({ dismiss: true });
+    showToast("Puedes retomar la configuración cuando quieras");
+    render();
+    return;
+  }
+
+  if (action === "onboarding-chapter-mode") {
+    persistOnboardingDraft();
+    state.onboarding.data.chapterMode = button.dataset.value === "custom" ? "custom" : "template";
+    syncOnboardingChapterSelections();
+    renderOnboardingModal();
+    return;
+  }
+
+  if (action === "onboarding-setup-type") {
+    persistOnboardingDraft();
+    state.onboarding.data.setupType = button.dataset.value === "comment" ? "comment" : "meeting";
+    renderOnboardingModal(false);
+  }
+}
+
+function handleOnboardingSubmit(event) {
+  const form = event.target;
+  if (!form.matches("[data-onboarding-form]")) return;
+  event.preventDefault();
+  persistOnboardingDraft(form);
+
+  if (state.onboarding.step < ONBOARDING_STEPS.length) {
+    state.onboarding.step += 1;
+    renderOnboardingModal();
+    return;
+  }
+
+  completeOnboarding();
+}
+
+function persistOnboardingDraft(form = onboardingDialog.querySelector("[data-onboarding-form]")) {
+  if (!form) return;
+  const formData = new FormData(form);
+  const data = state.onboarding.data;
+
+  if (state.onboarding.step === 1) {
+    data.thesisName = String(formData.get("thesisName") || data.thesisName || "").trim() || "Mi tesis doctoral";
+    data.program = String(formData.get("program") || "").trim();
+    data.university = String(formData.get("university") || "").trim();
+    data.phase = String(formData.get("phase") || data.phase || "Organizando el trabajo");
+    data.writingTarget = Number(formData.get("writingTarget") || data.writingTarget || 65000);
+    data.question = String(formData.get("question") || "").trim();
+  }
+
+  if (state.onboarding.step === 2) {
+    data.chapterMode = String(formData.get("chapterMode") || data.chapterMode || "template");
+    data.templateChapters = formData.getAll("templateChapters").filter(Boolean);
+    data.customChapters = String(formData.get("customChapters") || "").trim();
+    syncOnboardingChapterSelections();
+  }
+
+  if (state.onboarding.step === 3) {
+    data.focusChapter = String(formData.get("focusChapter") || data.focusChapter || "").trim();
+    data.firstTask = String(formData.get("firstTask") || "").trim();
+    data.firstDue = String(formData.get("firstDue") || data.firstDue || "");
+  }
+
+  if (state.onboarding.step === 4) {
+    data.setupType = String(formData.get("setupType") || data.setupType || "meeting");
+    data.meetingDate = String(formData.get("meetingDate") || data.meetingDate || "");
+    data.meetingTime = String(formData.get("meetingTime") || data.meetingTime || "");
+    data.meetingWith = String(formData.get("meetingWith") || "").trim();
+    data.meetingTopic = String(formData.get("meetingTopic") || "").trim();
+    data.commentChapter = String(formData.get("commentChapter") || data.commentChapter || "").trim();
+    data.commentText = String(formData.get("commentText") || "").trim();
+    data.commentDue = String(formData.get("commentDue") || data.commentDue || "");
+  }
+
+  state.onboarding.data = data;
+  state.onboarding.step = clamp(Number(state.onboarding.step || 1), 1, ONBOARDING_STEPS.length);
+}
+
+function syncOnboardingChapterSelections() {
+  const planned = onboardingPlannedChapterTitles();
+  const fallback = planned[0] || "Introducción";
+  if (!planned.includes(state.onboarding.data.focusChapter)) {
+    state.onboarding.data.focusChapter = fallback;
+  }
+  if (!planned.includes(state.onboarding.data.commentChapter)) {
+    state.onboarding.data.commentChapter = fallback;
+  }
+}
+
+function onboardingPlannedChapterTitles(data = state.onboarding.data) {
+  if (data.chapterMode === "custom") {
+    return [...new Set(splitLines(data.customChapters).map((item) => item.trim()).filter(Boolean))].slice(0, 6);
+  }
+  return [...new Set((data.templateChapters || []).map((item) => item.trim()).filter(Boolean))];
+}
+
+function renderOnboardingStepBody(step) {
+  const data = state.onboarding.data;
+  if (step === 1) {
+    return `
+      <div class="onboarding-copy-block">
+        <p class="card-kicker">Paso 1 de 4</p>
+        <h3>Solo necesitamos una base real, no una versión definitiva</h3>
+        <p>DoctoralOS funciona mejor cuando la tesis ya tiene un nombre operativo, una fase y una pregunta visible que te recuerde qué estás intentando cerrar.</p>
+      </div>
+      ${field("Título provisional", "thesisName", "text", data.thesisName, true).replace('id="thesisName"', 'id="onboardingThesisName"')}
+      ${field("Programa o línea doctoral", "program", "text", data.program, true)}
+      ${field("Universidad o centro", "university", "text", data.university, true)}
+      ${selectField("Fase actual", "phase", ["Organizando el trabajo", "Exploración", "Escritura", "Escritura y revisión", "Cierre"], data.phase)}
+      ${field("Objetivo aproximado de palabras", "writingTarget", "number", data.writingTarget, true)}
+      ${field("Pregunta o foco doctoral", "question", "textarea", data.question || "Formula en una frase qué intenta resolver tu tesis ahora mismo.", true)}
+    `;
+  }
+
+  if (step === 2) {
+    const planned = onboardingPlannedChapterTitles();
+    return `
+      <div class="onboarding-copy-block">
+        <p class="card-kicker">Paso 2 de 4</p>
+        <h3>Construyamos el esqueleto mínimo de la tesis</h3>
+        <p>Lo importante aquí no es cerrar el índice definitivo, sino arrancar con una estructura suficiente para poder escribir, revisar y planificar la semana.</p>
+      </div>
+      <input name="chapterMode" type="hidden" value="${escapeAttribute(data.chapterMode)}">
+      <div class="onboarding-toggle-row">
+        <button class="onboarding-toggle ${data.chapterMode === "template" ? "is-active" : ""}" data-action="onboarding-chapter-mode" data-value="template" type="button">Plantilla rápida</button>
+        <button class="onboarding-toggle ${data.chapterMode === "custom" ? "is-active" : ""}" data-action="onboarding-chapter-mode" data-value="custom" type="button">Capítulos propios</button>
+      </div>
+      ${data.chapterMode === "template" ? `
+        <div class="onboarding-choice-grid">
+          ${ONBOARDING_CHAPTER_TEMPLATES.map((chapter) => `
+            <label class="onboarding-choice-card ${data.templateChapters.includes(chapter.title) ? "is-selected" : ""}">
+              <input ${data.templateChapters.includes(chapter.title) ? "checked" : ""} name="templateChapters" type="checkbox" value="${escapeAttribute(chapter.title)}">
+              <strong>${escapeHtml(chapter.title)}</strong>
+              <span>${escapeHtml(chapter.goal)}</span>
+            </label>
+          `).join("")}
+        </div>
+      ` : `
+        ${field("Escribe de 2 a 6 capítulos, uno por línea", "customChapters", "textarea", data.customChapters || "Introducción\nMarco teórico\nMetodología", true)}
+      `}
+      <p class="form-help">Ahora mismo se crearán solo los capítulos iniciales. Luego podrás editarlos, renombrarlos o ampliarlos con calma.</p>
+      ${planned.length ? `<div class="onboarding-inline-note"><strong>Estructura prevista:</strong> ${escapeHtml(planned.join(" · "))}</div>` : `<div class="onboarding-inline-note">Selecciona al menos dos capítulos para continuar con una estructura útil.</div>`}
+    `;
+  }
+
+  if (step === 3) {
+    const chapterOptions = onboardingPlannedChapterTitles();
+    return `
+      <div class="onboarding-copy-block">
+        <p class="card-kicker">Paso 3 de 4</p>
+        <h3>Convirtamos la tesis en una semana clara</h3>
+        <p>La tesis empieza a respirar mejor cuando traduces el proyecto a una tarea cerrable, una fecha y un capítulo principal. Menos ambición difusa, más siguiente movimiento.</p>
+      </div>
+      ${selectField("Capítulo que necesita atención ahora", "focusChapter", chapterOptions.length ? chapterOptions : ["Introducción"], data.focusChapter)}
+      ${field("Tarea concreta que quieres cerrar esta semana", "firstTask", "text", data.firstTask || "Cerrar borrador del planteamiento metodológico", true)}
+      ${field("Fecha importante o límite interno", "firstDue", "date", data.firstDue, true)}
+      <div class="onboarding-inline-note"><strong>Regla útil:</strong> una prioridad de escritura, una de revisión y una administrativa como máximo.</div>
+    `;
+  }
+
+  const commentOptions = onboardingPlannedChapterTitles();
+  return `
+    <div class="onboarding-copy-block">
+      <p class="card-kicker">Paso 4 de 4</p>
+      <h3>Haz visible tu primera conversación académica</h3>
+      <p>La tesis no solo se escribe. También se revisa, se comenta y se acuerda. Aquí dejaremos preparada una reunión o un comentario real para que el flujo arranque ya con contexto.</p>
+    </div>
+    <input name="setupType" type="hidden" value="${escapeAttribute(data.setupType)}">
+    <div class="onboarding-toggle-row">
+      <button class="onboarding-toggle ${data.setupType === "meeting" ? "is-active" : ""}" data-action="onboarding-setup-type" data-value="meeting" type="button">Registrar reunión</button>
+      <button class="onboarding-toggle ${data.setupType === "comment" ? "is-active" : ""}" data-action="onboarding-setup-type" data-value="comment" type="button">Registrar comentario</button>
+    </div>
+    ${data.setupType === "meeting" ? `
+      ${field("Fecha de la próxima reunión", "meetingDate", "date", data.meetingDate, true).replace('id="meetingDate"', 'id="onboardingMeetingDate"')}
+      ${field("Hora", "meetingTime", "time", data.meetingTime, true)}
+      ${field("Con quién", "meetingWith", "text", data.meetingWith || "Directora", true)}
+      ${field("Tema principal", "meetingTopic", "text", data.meetingTopic || "Seguimiento del capítulo prioritario", true)}
+    ` : `
+      ${selectField("Capítulo afectado", "commentChapter", commentOptions.length ? commentOptions : ["Introducción"], data.commentChapter)}
+      ${field("Comentario o bloqueo detectado", "commentText", "textarea", data.commentText || "Falta justificar mejor la muestra o afinar el cierre de la pregunta.", true).replace('id="commentText"', 'id="onboardingCommentText"')}
+      ${field("Fecha objetivo para responderlo", "commentDue", "date", data.commentDue, true)}
+    `}
+  `;
+}
+
+function renderOnboardingPreview(step) {
+  const data = state.onboarding.data;
+  const plannedChapters = onboardingPlannedChapterTitles();
+  const activeSetup = data.setupType === "meeting"
+    ? `Reunión prevista: ${data.meetingDate ? formatDate(data.meetingDate) : "sin fecha"}${data.meetingTime ? ` · ${data.meetingTime}` : ""}${data.meetingWith ? ` · ${data.meetingWith}` : ""}`
+    : `Comentario preparado para ${data.commentChapter || "tu capítulo principal"}${data.commentDue ? ` · ${formatDate(data.commentDue)}` : ""}`;
+  const tips = {
+    1: "No hace falta acertar en todo: solo dejar una base suficientemente real para empezar a trabajar ya.",
+    2: "Empieza con 3 o 4 capítulos, no con el índice definitivo de toda la tesis.",
+    3: "La tarea de esta semana debería poder cerrarse en menos de dos sesiones largas de trabajo.",
+    4: "Una reunión o un comentario visible convierten la revisión en trabajo accionable dentro del sistema."
+  };
+  return `
+    <article class="card onboarding-preview-card">
+      <p class="card-kicker">Vista previa</p>
+      <h3>${escapeHtml(data.thesisName || "Mi tesis doctoral")}</h3>
+      <div class="onboarding-preview-stack">
+        <div>
+          <strong>Capítulos iniciales</strong>
+          <span>${plannedChapters.length ? escapeHtml(plannedChapters.join(" · ")) : "Aún no definidos"}</span>
+        </div>
+        <div>
+          <strong>Foco semanal</strong>
+          <span>${escapeHtml(data.firstTask || "Todavía sin tarea concreta")}</span>
+        </div>
+        <div>
+          <strong>Próxima conversación</strong>
+          <span>${escapeHtml(activeSetup)}</span>
+        </div>
+      </div>
+      <p class="onboarding-preview-tip">${escapeHtml(tips[step])}</p>
+    </article>
+  `;
+}
+
+function completeOnboarding() {
+  const data = state.onboarding.data;
+  const candidate = auth.user?.name || state.project.candidate || data.candidate || "Doctorando/a";
+  const plannedTitles = onboardingPlannedChapterTitles();
+  const effectiveTitles = plannedTitles.length ? plannedTitles : [...createInitialOnboardingState(candidate).data.templateChapters];
+  const selectedTemplates = ONBOARDING_CHAPTER_TEMPLATES.filter((chapter) => effectiveTitles.includes(chapter.title));
+  const seeds = selectedTemplates.length
+    ? selectedTemplates
+    : effectiveTitles.map((title) => ({ title, goal: `Definir el objetivo operativo de ${title.toLowerCase()}.`, target: 8000 }));
+
+  state.project = {
+    ...state.project,
+    name: data.thesisName || state.project.name,
+    candidate,
+    program: data.program,
+    university: data.university,
+    phase: data.phase,
+    writingTarget: Number(data.writingTarget || state.project.writingTarget || 65000),
+    question: data.question || state.project.question
+  };
+
+  if (!state.chapters.length) {
+    state.chapters = seeds.map((seed, index) => createChapterScaffold({
+      title: seed.title,
+      goal: seed.goal,
+      status: index === 0 ? "Borrador" : "Esquema",
+      progress: index === 0 ? 12 : 0,
+      words: 0,
+      target: seed.target,
+      due: offsetISODate(10 + (index * 7))
+    }));
+    state.editorChapterId = state.chapters[0]?.id || "";
+  }
+
+  if (data.firstTask && !state.tasks.some((task) => normalizeUserText(task.title) === normalizeUserText(data.firstTask))) {
+    state.tasks.unshift({
+      id: createId("tk"),
+      title: data.firstTask,
+      area: "Capítulos",
+      status: inferTaskColumn(data.firstDue),
+      due: data.firstDue || "",
+      effort: "90 min",
+      impact: "Alto",
+      done: false,
+      completedAt: ""
+    });
+  }
+
+  if (data.setupType === "meeting" && data.meetingDate) {
+    state.meetings.unshift({
+      id: createId("mt"),
+      date: data.meetingDate,
+      time: data.meetingTime || "",
+      type: inferMeetingType(data.meetingWith, data.meetingTopic),
+      attendees: data.meetingWith || "",
+      agenda: data.meetingTopic || "Seguimiento inicial de tesis",
+      decisions: "",
+      tasks: "",
+      next: ""
+    });
+  }
+
+  if (data.setupType === "comment" && data.commentText) {
+    state.reviewComments.unshift({
+      id: createId("rv"),
+      chapter: data.commentChapter || state.chapters[0]?.title || "Sin capítulo",
+      source: "Dirección",
+      comment: data.commentText,
+      response: "Definir respuesta y criterio de cierre.",
+      status: "Pendiente",
+      priority: "Media",
+      due: data.commentDue || ""
+    });
+  }
+
+  state.onboarding.completed = true;
+  state.onboarding.dismissed = false;
+  state.onboarding.active = false;
+  state.onboarding.step = ONBOARDING_STEPS.length;
+  state.activeView = "dashboard";
+  saveState("Sistema doctoral activado");
+  onboardingModal.hidden = true;
+  render();
+}
+
 function authModalCopy(mode) {
   if (mode === "recover") {
     return {
@@ -730,6 +1206,7 @@ async function handleAuthSubmit(event) {
     form.reset();
     showToast(mode === "password-reset-confirm" ? "Contraseña actualizada" : "Cuenta sincronizada");
     render();
+    launchOnboardingIfNeeded();
   } catch (error) {
     setAuthStatus("Error");
     showToast(error.message || "No se pudo conectar");
@@ -759,11 +1236,13 @@ async function restoreSession() {
       state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state));
       saveState("", { skipSync: true });
       render();
+      launchOnboardingIfNeeded();
     } else {
       state = createFreshState(result.user);
       saveState("", { skipSync: true });
       await syncNow(false);
       render();
+      launchOnboardingIfNeeded();
     }
   } catch (error) {
     auth = { ...auth, user: null, status: "offline", lastSync: "", statusLabel: "Backend offline" };
@@ -903,6 +1382,15 @@ function handleScreenClick(event) {
 
   if (action === "auth-launch") {
     openAuthModal(target.dataset.intent === "register" ? "register" : "login");
+    return;
+  }
+
+  if (action === "open-onboarding") {
+    if (requiresAuthenticationWall()) {
+      openAuthModal("login");
+      return;
+    }
+    openOnboarding(Number(target.dataset.step || 1));
     return;
   }
 
@@ -1306,6 +1794,7 @@ function render() {
     viewTitle.textContent = "Acceso privado";
     updateSidebar();
     renderAuthGate();
+    onboardingModal.hidden = true;
     hydrateIcons(screen);
     screen.focus({ preventScroll: true });
     return;
@@ -1330,6 +1819,8 @@ function render() {
 
   (renderers[state.activeView] || renderers.dashboard)();
   hydrateIcons(screen);
+  renderOnboardingModal(false);
+  launchOnboardingIfNeeded();
   screen.focus({ preventScroll: true });
 }
 
@@ -1472,7 +1963,7 @@ function renderDashboard() {
         <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir revisión</button>
       </article>
     </section>
-  ` : `
+  ` : state.onboarding.completed ? `
     <section class="onboarding-strip">
       <article class="${state.chapters.length ? "is-done" : ""}">
         <span class="step-number">1</span>
@@ -1491,6 +1982,33 @@ function renderDashboard() {
         <h3>Cierra comentarios</h3>
         <p>Registra acuerdos y feedback accionable.</p>
         <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir</button>
+      </article>
+    </section>
+  ` : `
+    <section class="onboarding-strip premium-onboarding-strip">
+      <article class="${state.project.program || state.project.university || state.project.question ? "is-done" : ""}">
+        <span class="step-number">1</span>
+        <h3>Define tu base doctoral</h3>
+        <p>Título, fase, programa y pregunta visibles desde el primer día.</p>
+        <button class="tiny-button" data-action="open-onboarding" data-step="1" type="button">Abrir paso</button>
+      </article>
+      <article class="${state.chapters.length ? "is-done" : ""}">
+        <span class="step-number">2</span>
+        <h3>Monta la estructura</h3>
+        <p>Crea un esqueleto suficiente para empezar a escribir sin bloquearte.</p>
+        <button class="tiny-button" data-action="open-onboarding" data-step="2" type="button">Abrir paso</button>
+      </article>
+      <article class="${state.tasks.length ? "is-done" : ""}">
+        <span class="step-number">3</span>
+        <h3>Haz la semana cerrable</h3>
+        <p>Convierte la tesis en una tarea concreta con fecha y capítulo activo.</p>
+        <button class="tiny-button" data-action="open-onboarding" data-step="3" type="button">Abrir paso</button>
+      </article>
+      <article class="${state.reviewComments.length || state.meetings.length ? "is-done" : ""}">
+        <span class="step-number">4</span>
+        <h3>Registra tu primera conversación</h3>
+        <p>Deja una reunión o comentario real para empezar con contexto.</p>
+        <button class="tiny-button" data-action="open-onboarding" data-step="4" type="button">Abrir paso</button>
       </article>
     </section>
   `;

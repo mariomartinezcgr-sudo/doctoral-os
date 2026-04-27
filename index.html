@@ -193,7 +193,35 @@
       </div>
     </div>
 
+    <div class="auth-modal onboarding-modal" id="onboardingModal" hidden>
+      <div class="auth-dialog onboarding-dialog" id="onboardingDialog" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+        <div class="section-header onboarding-head">
+          <div>
+            <p class="eyebrow">Configuración inicial guiada</p>
+            <h2 id="onboardingTitle">Empecemos por tu tesis</h2>
+            <p id="onboardingDescription">En menos de cinco minutos dejaremos la tesis convertida en un espacio real de trabajo: estructura, semana y primera conversación académica.</p>
+          </div>
+          <button class="ghost-button subtle-button" data-action="onboarding-close" type="button">Más tarde</button>
+        </div>
+
+        <div class="onboarding-progress" id="onboardingProgress"></div>
+
+        <form class="onboarding-shell" data-onboarding-form>
+          <div class="onboarding-grid">
+            <div class="form-panel form-grid onboarding-body" id="onboardingBody"></div>
+            <aside class="onboarding-preview" id="onboardingPreview"></aside>
+          </div>
+          <div class="onboarding-footer">
+            <button class="ghost-button subtle-button" data-action="onboarding-skip" type="button">Saltar por ahora</button>
+            <div class="onboarding-footer-actions">
+              <button class="ghost-button subtle-button" id="onboardingBack" data-action="onboarding-back" type="button">Atrás</button>
+              <button class="button" id="onboardingPrimary" type="submit">Continuar</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
-
