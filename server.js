@@ -352,11 +352,11 @@ async function handleApi(req, res) {
     const body = await readJson(req);
     const message = String(body.message || "").trim();
     if (!message) {
-      sendJson(res, 400, { error: "Escribe un mensaje para el asistente." });
+      sendJson(res, 400, { error: "Escribe un mensaje para TeDoc." });
       return;
     }
     if (!process.env.OPENAI_API_KEY) {
-      sendJson(res, 503, { error: "El asistente IA todavía no está configurado en el servidor." });
+      sendJson(res, 503, { error: "TeDoc con IA todavía no está configurado en el servidor." });
       return;
     }
 
@@ -369,7 +369,7 @@ async function handleApi(req, res) {
       sendJson(res, 200, { ok: true, reply: result.reply, state: result.state, savedAt, model: result.model, mode: "openai" });
     } catch (error) {
       console.error("Assistant error", error);
-      sendJson(res, 502, { error: "El asistente IA no pudo responder ahora mismo." });
+      sendJson(res, 502, { error: "TeDoc con IA no pudo responder ahora mismo." });
     }
     return;
   }
@@ -1050,7 +1050,7 @@ async function openAIResponsesCreate(payload) {
 function buildAssistantPrompt(user, state) {
   const context = buildAssistantContext(state);
   return [
-    "Eres el asistente de DoctoralOS, una app SaaS para doctorandos individuales.",
+    "Eres TeDoc, el asistente de DoctoralOS, una app SaaS para doctorandos individuales.",
     "Responde siempre en español, con tono claro, práctico y breve.",
     "Tu trabajo es ayudar a terminar la tesis con menos caos.",
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",

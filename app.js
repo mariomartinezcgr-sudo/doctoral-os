@@ -57,7 +57,7 @@ const viewTitles = {
   reviews: "Reuniones y revisión",
   writing: "Escritura",
   forum: "Foro",
-  assistant: "Asistente",
+  assistant: "TeDoc",
 };
 
 const defaultState = {
@@ -485,7 +485,7 @@ function createDemoState() {
       { id: createId("wr"), date: demoDateOffset(-6), chapter: chapter2.title, words: 680, minutes: 80, mood: "Trabado", note: "Sesión lenta por duplicación entre apartados; queda tarea clara para la semana." }
     ],
     assistantThread: [
-      { id: createId("msg"), role: "assistant", text: "Estás en la demo guiada de DoctoralOS. En dos o tres minutos puedes ver el panel, abrir el capítulo metodológico, revisar comentarios y pedirme acciones dentro de esta tesis de ejemplo.", createdAt: demoTimestamp(-1, 9, 6) },
+      { id: createId("msg"), role: "assistant", text: "Soy TeDoc, la guía asistida de esta demo. En dos o tres minutos puedes ver el panel, abrir el capítulo metodológico, revisar comentarios y pedirme acciones dentro de esta tesis de ejemplo.", createdAt: demoTimestamp(-1, 9, 6) },
       { id: createId("msg"), role: "user", text: "Resúmeme el progreso actual", createdAt: demoTimestamp(-1, 9, 7) },
       { id: createId("msg"), role: "assistant", text: `Resumen actual:
 - 4 capítulos registrados con un progreso medio del 53%.
@@ -1950,7 +1950,7 @@ function renderAuthGate() {
             <li>Capítulos con editor, checklist y notas</li>
             <li>Plan semanal, reuniones y comentarios en el mismo sitio</li>
             <li>Escritura registrada, respaldo exportable y cuenta privada</li>
-            <li>Asistente y foro preparados para crecer con la v1</li>
+            <li>TeDoc y el foro preparados para crecer con la v1</li>
           </ul>
           <div class="gate-trust-list">
             <article>
@@ -1992,7 +1992,7 @@ function renderDashboard() {
         </div>
         <p class="card-kicker">Tesis de ejemplo</p>
         <h2>Entiende el valor del producto antes de pedir acceso</h2>
-        <p>Empieza por el panel para ver foco y próxima entrega, abre el capítulo metodológico para entender el editor y termina en revisión o asistente para ver cómo se convierten reuniones y comentarios en trabajo cerrable.</p>
+        <p>Empieza por el panel para ver foco y próxima entrega, abre el capítulo metodológico para entender el editor y termina en revisión o en TeDoc para ver cómo se convierten reuniones y comentarios en trabajo cerrable.</p>
         <div class="demo-tour-grid">
           <button class="demo-tour-card" data-action="go" data-view="dashboard" type="button">
             <strong>1. Entiende el panel</strong>
@@ -2003,7 +2003,7 @@ function renderDashboard() {
             <span>Editor con secciones, checklist de calidad, notas y tareas del capítulo.</span>
           </button>
           <button class="demo-tour-card" data-action="go" data-view="assistant" type="button">
-            <strong>3. Prueba el asistente</strong>
+            <strong>3. Prueba TeDoc</strong>
             <span>Pide un resumen, una agenda o una acción concreta dentro de la demo.</span>
           </button>
         </div>
@@ -2032,7 +2032,7 @@ function renderDashboard() {
       <article class="is-done">
         <span class="step-number">3</span>
         <h3>Revisión y cierre</h3>
-        <p>Mira comentarios, reunión y asistente para entender cómo se convierte el feedback en acciones.</p>
+        <p>Mira comentarios, reunión y TeDoc para entender cómo se convierte el feedback en acciones.</p>
         <button class="tiny-button" data-action="go" data-view="reviews" type="button">Abrir revisión</button>
       </article>
     </section>
@@ -2051,7 +2051,7 @@ function renderDashboard() {
       <div class="onboarding-success-actions">
         <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Abrir capítulo prioritario</button>
         <button class="ghost-button" data-action="go" data-view="planner" type="button"><span data-icon="calendar"></span>Revisar semana</button>
-        <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir siguiente paso</button>
+        <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir siguiente paso a TeDoc</button>
         <button class="subtle-button" data-action="dismiss-onboarding-summary" type="button">Ocultar resumen</button>
       </div>
     </section>
@@ -2142,7 +2142,7 @@ function renderDashboard() {
             <button class="button" data-action="go" data-view="chapters" type="button"><span data-icon="chapters"></span>Escribir capítulo</button>
             <button class="ghost-button" data-action="go" data-view="planner" type="button"><span data-icon="calendar"></span>Planificar semana</button>
             <button class="ghost-button" data-action="go" data-view="reviews" type="button"><span data-icon="review"></span>Resolver comentarios</button>
-            <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir consejo</button>
+            <button class="ghost-button" data-action="go" data-view="assistant" type="button"><span data-icon="assistant"></span>Pedir consejo a TeDoc</button>
           </div>
         </div>
         <div class="progress-orbit" style="--value: ${overallProgress()}%">
@@ -2969,17 +2969,17 @@ function renderForum() {
 function renderAssistant() {
   const suggestions = assistantSuggestions();
   const assistantModeText = assistantCanUseRemote()
-    ? "El asistente intentará usar IA si está disponible y, si no, volverá al modo local sin romper tu trabajo."
+    ? "TeDoc intentará usar IA si está disponible y, si no, volverá al modo local sin romper tu trabajo."
     : demoMode
       ? "Demo guiada activa. Las acciones se guardan dentro de esta tesis de ejemplo."
-      : "Modo local activo. Puedes trabajar con el asistente básico ahora y activar la IA más adelante cuando conectes OpenAI.";
+      : "Modo local activo. Puedes trabajar con TeDoc ahora y activar la IA más adelante cuando conectes OpenAI.";
 
   screen.innerHTML = `
     <section class="assistant-layout">
       <div class="assistant-panel">
         <div class="section-header assistant-header">
           <div>
-            <p class="eyebrow">Asistente interno</p>
+            <p class="eyebrow">TeDoc</p>
             <h2>Preguntas, consejo y acciones directas</h2>
             <p>Puedes pedirme resumen, prioridades o escribir cosas como "Agendar reunión el viernes a las 16:00 con directora sobre metodología".</p>
           </div>
@@ -3028,7 +3028,7 @@ function renderAssistantMessage(message) {
   return `
     <article class="assistant-message ${isUser ? "is-user" : "is-assistant"}">
       <div class="assistant-message-head">
-        <strong>${isUser ? "Tú" : "Asistente"}</strong>
+        <strong>${isUser ? "Tú" : "TeDoc"}</strong>
         <span>${formatDateTime(message.createdAt)}</span>
       </div>
       <div class="assistant-message-body">${escapeMultiline(message.text)}</div>
@@ -3040,13 +3040,13 @@ function createInitialAssistantThread() {
     ? `Estás en la demo guiada de DoctoralOS. Te recomiendo este recorrido corto:
 - Abre el panel para ver foco y siguiente entrega
 - Entra en Capítulos y revisa el método
-- Pídeme una agenda o un resumen dentro del Asistente
+- Pídeme una agenda o un resumen dentro de TeDoc
 
 Prueba algo como:
 - Resúmeme el progreso actual
 - Qué debería priorizar esta semana
 - Prepara una agenda breve para la reunión con la directora`
-    : `Soy el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.
+    : `Soy TeDoc, el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.
 
 Prueba algo como:
 - Qué debería priorizar esta semana
@@ -3083,7 +3083,7 @@ async function submitAssistantPrompt(message) {
     return;
   }
   if (assistantBusy) {
-    showToast("El asistente sigue respondiendo");
+    showToast("TeDoc sigue respondiendo");
     return;
   }
 
@@ -3096,14 +3096,14 @@ async function submitAssistantPrompt(message) {
     const result = await requestAssistantReply(text);
     state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state));
     saveState("", { skipSync: true });
-    showToast(result.model ? "Asistente IA actualizado" : "Asistente actualizado");
+    showToast(result.model ? "TeDoc con IA actualizado" : "TeDoc actualizado");
   } catch (error) {
     const result = buildAssistantReply(text);
     state.assistantThread.push(createAssistantEntry("assistant", result.reply));
     pruneAssistantThread();
     saveState(result.toastMessage || "Respuesta local guardada");
     if (assistantCanUseRemote()) {
-      console.warn("Asistente IA no disponible, usando modo local", error);
+      console.warn("TeDoc con IA no disponible, usando modo local", error);
     }
   } finally {
     assistantBusy = false;
@@ -3125,7 +3125,7 @@ async function requestAssistantReply(message) {
     body: JSON.stringify({ message, state })
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "El asistente no está disponible ahora mismo");
+  if (!response.ok) throw new Error(result.error || "TeDoc no está disponible ahora mismo");
 
   auth.status = "synced";
   auth.statusLabel = "Sincronizado";
@@ -3312,7 +3312,7 @@ function createMeetingFromPrompt(message) {
   });
   return {
     reply: `Listo. He agendado una reunión para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. La he guardado en Reuniones y revisión.`,
-    toastMessage: "Reunión creada desde el asistente"
+    toastMessage: "Reunión creada desde TeDoc"
   };
 }
 
@@ -3337,7 +3337,7 @@ function createTaskFromPrompt(message) {
   });
   return {
     reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Después"}.`,
-    toastMessage: "Tarea creada desde el asistente"
+    toastMessage: "Tarea creada desde TeDoc"
   };
 }
 
@@ -3362,7 +3362,7 @@ function createReviewCommentFromPrompt(message) {
 
   return {
     reply: `He registrado un comentario de ${source}${chapter ? ` en ${chapter.title}` : ""}${due ? ` con fecha objetivo ${formatDate(due)}` : ""}.`,
-    toastMessage: "Comentario creado desde el asistente"
+    toastMessage: "Comentario creado desde TeDoc"
   };
 }
 
@@ -3388,7 +3388,7 @@ function createChapterNoteFromPrompt(message) {
 
   return {
     reply: `He guardado una nota en ${chapter.title}.`,
-    toastMessage: "Nota creada desde el asistente"
+    toastMessage: "Nota creada desde TeDoc"
   };
 }
 

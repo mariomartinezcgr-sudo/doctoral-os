@@ -56,7 +56,7 @@ Opcionalmente puedes añadir:
 - Plan semanal tipo tablero.
 - Reuniones y revision en una sola vista.
 - Bitacora de escritura.
-- Asistente de tesis con modo local y, si configuras OpenAI, respuestas con IA y acciones sobre tareas y reuniones.
+- TeDoc, asistente de tesis con modo local y, si configuras OpenAI, respuestas con IA y acciones sobre tareas y reuniones.
 - Cuenta, sincronizacion y exportacion de respaldo.
 
 ## Archivos
