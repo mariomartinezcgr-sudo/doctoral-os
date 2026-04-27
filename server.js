@@ -13,6 +13,7 @@ const LEGACY_DB_PATH = path.join(DATA_DIR, "db.json");
 const MAX_BODY = 2 * 1024 * 1024;
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const RESEND_API_URL = "https://api.resend.com/emails";
 const ASSISTANT_THREAD_LIMIT = 16;
 const SESSION_COOKIE = "doctoral_os_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
@@ -23,6 +24,11 @@ const BETA_INVITE_CODE = String(process.env.BETA_INVITE_CODE || "").trim();
 const BETA_ALLOWED_EMAILS = new Set(String(process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => normalizeEmail(email)).filter(Boolean));
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
 const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
+const PASSWORD_RESET_DELIVERY = String(process.env.PASSWORD_RESET_DELIVERY || "").trim().toLowerCase();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const EMAIL_FROM = String(process.env.EMAIL_FROM || "").trim();
+const EMAIL_REPLY_TO = String(process.env.EMAIL_REPLY_TO || SUPPORT_EMAIL).trim();
+const EMAIL_SENDER_NAME = String(process.env.EMAIL_SENDER_NAME || "DoctoralOS").trim();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -216,14 +222,23 @@ async function handleApi(req, res) {
     prunePasswordResetTokens();
     const user = findUserByEmail(email);
     let previewUrl = "";
+    let delivery = passwordResetDeliveryMode();
     if (user) {
       db.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").run(user.id);
       const resetToken = createPasswordResetToken(user.id);
       insertPasswordResetToken(resetToken);
       const recoveryLink = buildPasswordResetLink(req, resetToken.token);
-      console.info("[DoctoralOS] Password reset for " + email + ": " + recoveryLink);
-      if (process.env.NODE_ENV !== "production") {
+      console.info("[DoctoralOS] Password reset prepared for " + email);
+      if (delivery === "preview") {
+        console.info("[DoctoralOS] Preview reset link: " + recoveryLink);
         previewUrl = recoveryLink;
+      } else if (delivery === "email") {
+        try {
+          await sendPasswordResetEmail({ user, recoveryLink });
+        } catch (error) {
+          console.error("[DoctoralOS] Password reset email failed", error);
+          delivery = "assisted";
+        }
       }
     }
 
@@ -238,11 +253,21 @@ async function handleApi(req, res) {
       return;
     }
 
+    if (delivery === "email") {
+      sendJson(res, 200, {
+        ok: true,
+        delivery: "email",
+        supportEmail: SUPPORT_EMAIL,
+        message: "Si la cuenta existe, te hemos enviado un enlace seguro para restablecer la contraseña."
+      });
+      return;
+    }
+
     sendJson(res, 200, {
       ok: true,
       delivery: "assisted",
       supportEmail: SUPPORT_EMAIL,
-      message: "Si la cuenta existe, ya hemos preparado un enlace seguro de recuperación. Durante la beta, la entrega se gestiona de forma asistida."
+      message: "Si la cuenta existe, ya hemos preparado un enlace seguro de recuperación. Si el correo no llega o seguimos en una beta asistida, escríbenos y te ayudamos."
     });
     return;
   }
@@ -766,6 +791,110 @@ function buildPasswordResetLink(req, token) {
   return url.toString();
 }
 
+function passwordResetDeliveryMode() {
+  if (PASSWORD_RESET_DELIVERY === "preview") return "preview";
+  if (PASSWORD_RESET_DELIVERY === "email") return passwordResetEmailConfigured() ? "email" : "assisted";
+  if (process.env.NODE_ENV !== "production") return "preview";
+  return passwordResetEmailConfigured() ? "email" : "assisted";
+}
+
+function passwordResetEmailConfigured() {
+  return Boolean(RESEND_API_KEY && EMAIL_FROM);
+}
+
+async function sendPasswordResetEmail({ user, recoveryLink }) {
+  if (!passwordResetEmailConfigured()) {
+    throw new Error("Password reset email is not configured");
+  }
+
+  const response = await fetch(RESEND_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + RESEND_API_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: formatEmailFrom(),
+      to: [user.email],
+      reply_to: EMAIL_REPLY_TO,
+      subject: "Restablece tu contraseña de DoctoralOS",
+      text: buildPasswordResetEmailText(user, recoveryLink),
+      html: buildPasswordResetEmailHtml(user, recoveryLink)
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data && data.message ? data.message : data && data.error && data.error.message ? data.error.message : "No se pudo enviar el correo de recuperación";
+    throw new Error(message);
+  }
+
+  return data;
+}
+
+function formatEmailFrom() {
+  if (!EMAIL_FROM) return SUPPORT_EMAIL;
+  return EMAIL_FROM.includes("<") ? EMAIL_FROM : `${EMAIL_SENDER_NAME} <${EMAIL_FROM}>`;
+}
+
+function buildPasswordResetEmailText(user, recoveryLink) {
+  return [
+    `Hola ${user.name || "doctorando/a"},`,
+    "",
+    "Hemos recibido una solicitud para restablecer la contraseña de tu cuenta de DoctoralOS.",
+    "Usa este enlace para elegir una nueva contraseña:",
+    recoveryLink,
+    "",
+    "El enlace caduca en 60 minutos.",
+    "",
+    "Si no has pedido este cambio, puedes ignorar este mensaje.",
+    "",
+    `Si necesitas ayuda, escríbenos a ${SUPPORT_EMAIL}.`,
+    "",
+    "Equipo DoctoralOS"
+  ].join("\n");
+}
+
+function buildPasswordResetEmailHtml(user, recoveryLink) {
+  const safeName = escapeHtml(user.name || "doctorando/a");
+  const safeLink = escapeAttribute(recoveryLink);
+  const safeSupport = escapeHtml(SUPPORT_EMAIL);
+  return `<!doctype html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f4f6f8;font-family:Inter,Arial,sans-serif;color:#192124;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 16px;background:#f4f6f8;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #d7e1e5;border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:28px 28px 8px;">
+                <div style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:#5f6f76;font-weight:700;">DoctoralOS</div>
+                <h1 style="margin:12px 0 10px;font-size:30px;line-height:1.1;color:#182225;">Restablece tu contraseña</h1>
+                <p style="margin:0 0 18px;font-size:16px;line-height:1.6;color:#41545c;">Hola ${safeName}, hemos recibido una solicitud para cambiar la contraseña de tu cuenta.</p>
+                <p style="margin:0 0 22px;font-size:16px;line-height:1.6;color:#41545c;">Haz clic en el botón de abajo para crear una nueva contraseña. El enlace caduca en 60 minutos.</p>
+                <a href="${safeLink}" style="display:inline-block;padding:14px 20px;border-radius:12px;background:#2f7d74;color:#ffffff;text-decoration:none;font-weight:700;">Elegir nueva contraseña</a>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 28px 8px;">
+                <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#5f6f76;">Si el botón no funciona, copia y pega este enlace en tu navegador:</p>
+                <p style="margin:0 0 18px;font-size:13px;line-height:1.6;color:#2f7d74;word-break:break-all;">${escapeHtml(recoveryLink)}</p>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#5f6f76;">Si no has pedido este cambio, puedes ignorar este mensaje.</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 28px 28px;border-top:1px solid #e5ecef;font-size:13px;line-height:1.6;color:#6a7b81;">
+                Si necesitas ayuda, escríbenos a ${safeSupport}.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
 function publicSessionPayload(user) {
   return { user: publicUser(user) };
 }
@@ -815,6 +944,19 @@ function safeSecretEqual(left, right) {
   const bBuffer = Buffer.from(b);
   if (aBuffer.length !== bBuffer.length) return false;
   return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("\n", " ");
 }
 
 function sanitizeState(state) {

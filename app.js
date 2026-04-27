@@ -1083,7 +1083,7 @@ function authModalCopy(mode) {
   if (mode === "recover") {
     return {
       title: "Recuperar acceso",
-      description: "Solicita un enlace seguro para restablecer tu contraseña. Durante esta beta, la entrega del enlace se gestiona de forma asistida para mantener el acceso más controlado."
+      description: "Solicita un enlace seguro para restablecer tu contraseña. Si el correo tarda o surge cualquier incidencia durante la beta, también puedes escribirnos y te ayudamos."
     };
   }
   if (mode === "reset") {

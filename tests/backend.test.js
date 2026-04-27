@@ -130,6 +130,14 @@ async function main() {
       body: { email: `invited-${Date.now()}@example.com`, password: "password123", name: "Invited User", inviteCode: "doctoralos-beta" }
     });
     assert.equal(invited.status, 201);
+
+    const assistedReset = await request("/api/password-reset/request", {
+      method: "POST",
+      body: { email: invited.body.user.email }
+    });
+    assert.equal(assistedReset.status, 200);
+    assert.equal(assistedReset.body.delivery, "assisted");
+    assert.ok(assistedReset.body.message.includes("correo no llega") || assistedReset.body.message.includes("beta asistida"));
   });
 
   console.log("backend tests passed");

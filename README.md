@@ -25,6 +25,29 @@ Para activar el asistente con IA real, define `OPENAI_API_KEY`. Opcionalmente pu
 
 La beta cerrada queda lista para producción: con `NODE_ENV=production` el registro nuevo se puede limitar. Puedes permitir acceso con `BETA_INVITE_CODE` o con una lista de correos en `BETA_ALLOWED_EMAILS` separados por comas.
 
+## Recuperación de contraseña por email
+
+DoctoralOS ya incluye flujo de recuperación:
+
+- `He olvidado mi contraseña` en el acceso
+- enlace seguro con caducidad de 60 minutos
+- nueva contraseña y entrada automática en la cuenta
+
+En local o en test, la recuperación funciona en modo `preview` para no depender de un proveedor de correo.
+
+En producción, puedes elegir:
+
+- modo asistido por defecto si no configuras correo
+- envío real por email si defines:
+  - `RESEND_API_KEY`
+  - `EMAIL_FROM`
+
+Opcionalmente puedes añadir:
+
+- `EMAIL_REPLY_TO`
+- `EMAIL_SENDER_NAME`
+- `PASSWORD_RESET_DELIVERY=email` para forzar envío por correo cuando la configuración esté lista
+
 ## Modulos incluidos
 
 - Panel general orientado a tres acciones: escribir capitulo, planificar semana y resolver comentarios.
