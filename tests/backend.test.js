@@ -140,6 +140,33 @@ async function main() {
     assert.ok(assistedReset.body.message.includes("correo no llega") || assistedReset.body.message.includes("beta asistida"));
   });
 
+  await withServer(BASE_PORT + 2, { NODE_ENV: "test", PUBLIC_HOLD_PAGE: "1", SUPPORT_EMAIL: "owner@example.com" }, async ({ request }) => {
+    const publicHome = await request("/", { method: "GET" });
+    assert.equal(publicHome.status, 200);
+    assert.ok(String(publicHome.body).includes("Estamos trabajando en ello"));
+
+    const publicLanding = await request("/landing.html", { method: "GET" });
+    assert.equal(publicLanding.status, 200);
+    assert.ok(String(publicLanding.body).includes("Estamos trabajando en ello"));
+
+    const demoBlocked = await request("/app?demo=1", { method: "GET" });
+    assert.equal(demoBlocked.status, 200);
+    assert.ok(String(demoBlocked.body).includes("Estamos trabajando en ello"));
+
+    const ownerRegister = await request("/api/register", {
+      method: "POST",
+      body: { email: "owner@example.com", password: "password123", name: "Owner" }
+    });
+    assert.equal(ownerRegister.status, 201);
+
+    const ownerPreview = await request("/preview", {
+      method: "GET",
+      cookie: ownerRegister.cookie
+    });
+    assert.equal(ownerPreview.status, 200);
+    assert.ok(String(ownerPreview.body).includes("El sistema de trabajo para terminar la tesis"));
+  });
+
   console.log("backend tests passed");
 }
 
@@ -191,9 +218,12 @@ async function request(baseUrl, pathname, options) {
   });
   const text = await response.text();
   const setCookie = response.headers.get("set-cookie") || "";
+  const contentType = response.headers.get("content-type") || "";
   return {
     status: response.status,
-    body: text ? JSON.parse(text) : {},
+    body: contentType.includes("application/json")
+      ? (text ? JSON.parse(text) : {})
+      : text,
     setCookie,
     cookie: setCookie ? setCookie.split(";")[0] : ""
   };

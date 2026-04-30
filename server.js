@@ -19,10 +19,12 @@ const SESSION_COOKIE = "doctoral_os_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const rateLimitStore = new Map();
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
+const PUBLIC_HOLD_PAGE = /^(1|true|yes)$/i.test(String(process.env.PUBLIC_HOLD_PAGE || (process.env.NODE_ENV === "production" ? "1" : "0")));
+const PRIVATE_SITE_ALLOWED_EMAILS = new Set(String(process.env.PRIVATE_SITE_ALLOWED_EMAILS || SUPPORT_EMAIL).split(",").map((email) => normalizeEmail(email)).filter(Boolean));
 const CLOSED_BETA = /^(1|true|yes)$/i.test(String(process.env.CLOSED_BETA || (process.env.NODE_ENV === "production" ? "1" : "0")));
 const BETA_INVITE_CODE = String(process.env.BETA_INVITE_CODE || "").trim();
 const BETA_ALLOWED_EMAILS = new Set(String(process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => normalizeEmail(email)).filter(Boolean));
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
 const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 const PASSWORD_RESET_DELIVERY = String(process.env.PASSWORD_RESET_DELIVERY || "").trim().toLowerCase();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
@@ -46,6 +48,7 @@ const contentTypes = {
 };
 
 const PUBLIC_FILES = new Set([
+  "/holding.html",
   "/landing.html",
   "/index.html",
   "/pricing.html",
@@ -416,7 +419,8 @@ async function handleApi(req, res) {
 }
 
 function serveStatic(req, res) {
-  const { pathname } = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+  const requestUrl = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+  const { pathname, searchParams } = requestUrl;
   if (!["GET", "HEAD"].includes(req.method)) {
     res.writeHead(405, {
       ...securityHeaders(req),
@@ -428,7 +432,8 @@ function serveStatic(req, res) {
   }
 
   const routeMap = {
-    "/": "/landing.html",
+    "/": PUBLIC_HOLD_PAGE ? "/holding.html" : "/landing.html",
+    "/preview": "/landing.html",
     "/app": "/index.html",
     "/app/": "/index.html",
     "/pricing": "/pricing.html",
@@ -453,6 +458,31 @@ function serveStatic(req, res) {
     return;
   }
   const requested = routeMap[pathname] || decodeURIComponent(pathname);
+  const hasPrivateSiteAccess = canAccessPrivateSite(req);
+
+  if (PUBLIC_HOLD_PAGE) {
+    const protectedMarketingFiles = new Set([
+      "/landing.html",
+      "/pricing.html",
+      "/help.html",
+      "/privacy.html",
+      "/terms.html",
+      "/security.html"
+    ]);
+    const wantsPreview = pathname === "/preview";
+    const wantsPublicDemo = (pathname === "/app" || pathname === "/app/") && searchParams.get("demo") === "1";
+    const isProtectedMarketingAsset = requested.startsWith("/assets/marketing/");
+    const requiresPrivateAccess = wantsPreview || wantsPublicDemo || protectedMarketingFiles.has(requested) || isProtectedMarketingAsset;
+
+    if (requiresPrivateAccess && !hasPrivateSiteAccess) {
+      if (wantsPreview) {
+        redirect(req, res, "/app?auth=login");
+        return;
+      }
+      serveFile(req, res, path.join(ROOT, "holding.html"));
+      return;
+    }
+  }
 
   const isPublicPath = PUBLIC_FILES.has(requested) || PUBLIC_PATH_PREFIXES.some((prefix) => requested.startsWith(prefix));
 
@@ -469,24 +499,7 @@ function serveStatic(req, res) {
     return;
   }
 
-  fs.readFile(filePath, (error, content) => {
-    if (error) {
-      res.writeHead(404, securityHeaders(req));
-      res.end("Not found");
-      return;
-    }
-
-    res.writeHead(200, {
-      ...securityHeaders(req),
-      "Content-Type": contentTypes[path.extname(filePath)] || "application/octet-stream",
-      "Cache-Control": "no-store"
-    });
-    if (req.method === "HEAD") {
-      res.end();
-      return;
-    }
-    res.end(content);
-  });
+  serveFile(req, res, filePath);
 }
 
 function clientIp(req) {
@@ -588,6 +601,28 @@ function getSessionToken(req) {
   return cookies[SESSION_COOKIE] || getBearerToken(req);
 }
 
+function getAuthenticatedUser(req) {
+  const token = getSessionToken(req);
+  if (!token) return null;
+
+  const session = db.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > ?").get(token, new Date().toISOString());
+  if (!session) return null;
+
+  const user = findUserById(session.user_id);
+  if (!user) return null;
+
+  db.prepare("UPDATE sessions SET last_seen_at = ? WHERE token = ?").run(new Date().toISOString(), token);
+  return user;
+}
+
+function canAccessPrivateSite(req) {
+  if (!PUBLIC_HOLD_PAGE) return true;
+  const user = getAuthenticatedUser(req);
+  if (!user) return false;
+  if (!PRIVATE_SITE_ALLOWED_EMAILS.size) return true;
+  return PRIVATE_SITE_ALLOWED_EMAILS.has(normalizeEmail(user.email));
+}
+
 function requireUser(req, res) {
   const token = getSessionToken(req);
   if (!token) {
@@ -639,6 +674,36 @@ function sendJson(res, status, payload, extraHeaders = {}) {
     ...extraHeaders
   });
   res.end(JSON.stringify(payload));
+}
+
+function redirect(req, res, location) {
+  res.writeHead(302, {
+    ...securityHeaders(req),
+    "Location": location,
+    "Cache-Control": "no-store"
+  });
+  res.end();
+}
+
+function serveFile(req, res, filePath) {
+  fs.readFile(filePath, (error, content) => {
+    if (error) {
+      res.writeHead(404, securityHeaders(req));
+      res.end("Not found");
+      return;
+    }
+
+    res.writeHead(200, {
+      ...securityHeaders(req),
+      "Content-Type": contentTypes[path.extname(filePath)] || "application/octet-stream",
+      "Cache-Control": "no-store"
+    });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    res.end(content);
+  });
 }
 
 function securityHeaders(req) {
