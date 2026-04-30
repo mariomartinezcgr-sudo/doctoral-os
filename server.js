@@ -20,7 +20,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const rateLimitStore = new Map();
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
-const PUBLIC_HOLD_PAGE = /^(1|true|yes)$/i.test(String(process.env.PUBLIC_HOLD_PAGE || (process.env.NODE_ENV === "production" ? "1" : "0")));
+const PUBLIC_HOLD_PAGE = /^(1|true|yes)$/i.test(String(process.env.PUBLIC_HOLD_PAGE || (process.env.NODE_ENV === "test" ? "0" : "1")));
 const PRIVATE_SITE_ALLOWED_EMAILS = new Set(String(process.env.PRIVATE_SITE_ALLOWED_EMAILS || SUPPORT_EMAIL).split(",").map((email) => normalizeEmail(email)).filter(Boolean));
 const CLOSED_BETA = /^(1|true|yes)$/i.test(String(process.env.CLOSED_BETA || (process.env.NODE_ENV === "production" ? "1" : "0")));
 const BETA_INVITE_CODE = String(process.env.BETA_INVITE_CODE || "").trim();
