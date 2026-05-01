@@ -4207,18 +4207,40 @@ tr:last-child td {
 }
 
 .coming-soon-shell {
-  width: min(760px, 100%);
+  width: min(980px, 100%);
 }
 
 .coming-soon-card {
   display: grid;
-  gap: 24px;
+  gap: 28px;
   padding: clamp(28px, 6vw, 48px);
   border: 1px solid rgba(35, 48, 52, 0.1);
   border-radius: 32px;
   background: rgba(255, 251, 245, 0.88);
   box-shadow: 0 30px 70px rgba(22, 34, 36, 0.12);
   backdrop-filter: blur(18px);
+}
+
+.coming-soon-topline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.coming-soon-topline span,
+.coming-soon-detail span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(35, 48, 52, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #56646b;
+  font-size: 0.78rem;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .coming-soon-brand {
@@ -4240,6 +4262,13 @@ tr:last-child td {
   gap: 12px;
 }
 
+.coming-soon-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(260px, 0.82fr);
+  gap: 22px;
+  align-items: start;
+}
+
 .coming-soon-copy h1 {
   margin-bottom: 0;
   font-size: clamp(3rem, 8vw, 5.2rem);
@@ -4258,23 +4287,45 @@ tr:last-child td {
   font-weight: 700;
 }
 
-.coming-soon-meta {
+.coming-soon-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  margin-top: 6px;
 }
 
-.coming-soon-meta span {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 14px;
+.coming-soon-note {
+  margin-bottom: 0;
+  color: #6b757b;
+  font-size: 0.92rem;
+}
+
+.coming-soon-side {
+  display: grid;
+  gap: 14px;
+}
+
+.coming-soon-detail {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
   border: 1px solid rgba(35, 48, 52, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.74);
-  color: #536067;
-  font-size: 0.88rem;
-  font-weight: 700;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(249, 251, 250, 0.84) 100%);
+  box-shadow: 0 16px 34px rgba(22, 34, 36, 0.08);
+}
+
+.coming-soon-detail strong {
+  color: #1f272b;
+  font-size: 1.15rem;
+  line-height: 1.1;
+}
+
+.coming-soon-detail p {
+  margin-bottom: 0;
+  color: #5b666d;
+  font-size: 0.96rem;
+  line-height: 1.65;
 }
 
 @media (max-width: 640px) {
@@ -4288,12 +4339,20 @@ tr:last-child td {
     font-size: clamp(2.5rem, 14vw, 4rem);
   }
 
-  .coming-soon-meta {
-    display: grid;
+  .coming-soon-layout {
     grid-template-columns: 1fr;
   }
 
-  .coming-soon-meta span {
-    justify-content: center;
+  .coming-soon-actions .button {
+    width: 100%;
+  }
+
+  .coming-soon-topline {
+    gap: 8px;
+  }
+
+  .coming-soon-topline span,
+  .coming-soon-detail span {
+    font-size: 0.72rem;
   }
 }
