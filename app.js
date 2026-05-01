@@ -3339,11 +3339,14 @@ function renderAssistant() {
           <ul class="quality-list compact-list">
             <li>Resumir progreso y detectar cuellos de botella</li>
             <li>Priorizar la semana según tareas, comentarios y fechas</li>
+            <li>Crear un mini plan semanal dentro de la app</li>
             <li>Detectar riesgos visibles antes de una entrega</li>
             <li>Proponer un plan de arranque de 45 minutos</li>
             <li>Crear tareas desde lenguaje natural</li>
             <li>Agendar reuniones con fecha y hora</li>
+            <li>Preparar y guardar agendas de reunión</li>
             <li>Registrar notas y comentarios de revisión</li>
+            <li>Redactar respuestas de trabajo a comentarios</li>
             <li>Dar consejo práctico sobre un capítulo concreto</li>
           </ul>
         </article>
@@ -3517,8 +3520,11 @@ Prueba algo como:
 
 Prueba algo como:
 - Qué debería priorizar esta semana
+- Créame tres tareas foco para esta semana
 - Dame un plan de arranque de 45 minutos para hoy
 - Detecta mis riesgos de entrega ahora mismo
+- Prepárame la próxima reunión y guárdala
+- Redacta respuesta al comentario más urgente
 - Crear tarea cerrar comentarios del capítulo 2 para mañana
 - Agendar reunión el viernes a las 16:00 con directora sobre metodología`;
 
@@ -3538,9 +3544,12 @@ function assistantSuggestions() {
   return [
     "Qué debería priorizar esta semana",
     "Resúmeme el progreso actual",
+    "Créame tres tareas foco para esta semana",
     "Dame un plan de arranque de 45 minutos para hoy",
     "Detecta mis riesgos de entrega ahora mismo",
     "Convierte mis comentarios pendientes en foco de esta semana",
+    "Prepárame la próxima reunión y guárdala en la app",
+    "Redacta respuesta al comentario más urgente",
     "Cómo de seguro está mi trabajo ahora mismo",
     "Analiza mi ritmo de escritura de las últimas semanas",
     "Dónde está mi cuello de botella ahora mismo",
@@ -3623,24 +3632,27 @@ function buildAssistantReply(message) {
   }
 
   if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
+  if (isWeeklyPlanCreationRequest(normalized)) return createWeeklyFocusTasksFromState();
   if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
   if (isPerformanceAdviceRequest(normalized)) return { reply: buildPerformanceAdvice() };
   if (isRiskRequest(normalized)) return { reply: buildRiskRadar() };
   if (isWarmStartRequest(normalized)) return { reply: buildWarmStartPlan() };
   if (isSafetyRequest(normalized)) return { reply: buildSafetyReply() };
+  if (isMeetingPreparationRequest(normalized)) return prepareMeetingBriefFromPrompt(message);
+  if (isCommentResponseRequest(normalized)) return prepareCommentResponseFromPrompt(message);
   if (isCommentToTaskRequest(normalized)) return convertCommentToTaskFromPrompt(message);
   if (isCommentActionPlanRequest(normalized)) return { reply: buildCommentActionPlan() };
   if (isMeetingCreationRequest(normalized)) return createMeetingFromPrompt(message);
-  if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
   if (isCommentCreationRequest(normalized)) return createReviewCommentFromPrompt(message);
   if (isNoteCreationRequest(normalized)) return createChapterNoteFromPrompt(message);
+  if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
   if (isMeetingAdviceRequest(normalized)) return { reply: buildMeetingAdvice() };
 
   const chapter = findChapterFromPrompt(message);
   if (chapter) return { reply: buildChapterAdvice(chapter) };
 
   return {
-    reply: "Puedo ayudarte con seis cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, detectar riesgos, proponerte un arranque de 45 minutos, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Detecta mis riesgos de entrega ahora mismo\n- Dame un plan de arranque de 45 minutos para hoy\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
+    reply: "Puedo ayudarte con ocho cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, montar un mini plan semanal, detectar riesgos, proponerte un arranque de 45 minutos, preparar reuniones, responder comentarios y crear tareas.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Créame tres tareas foco para esta semana\n- Detecta mis riesgos de entrega ahora mismo\n- Prepárame la próxima reunión y guárdala\n- Redacta respuesta al comentario más urgente\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
   };
 }
 
@@ -3653,11 +3665,13 @@ function isWeeklyPriorityRequest(normalized) {
 }
 
 function isMeetingCreationRequest(normalized) {
-  return (normalized.includes("reunion") || normalized.includes("agendar") || normalized.includes("agenda")) && (normalized.includes("crea") || normalized.includes("programa") || normalized.includes("agendar") || normalized.includes("agenda"));
+  return normalized.includes("agendar")
+    || /(?:crea|crear|programa|programar)\s+(?:una\s+)?reunion/.test(normalized);
 }
 
 function isTaskCreationRequest(normalized) {
-  return normalized.includes("tarea") || normalized.includes("recuerdame") || normalized.includes("recordame") || normalized.includes("anade") || normalized.includes("agrega");
+  if (normalized.includes("comentario") || normalized.includes("nota") || normalized.includes("reunion")) return false;
+  return normalized.includes("tarea") || normalized.includes("recuerdame") || normalized.includes("recordame");
 }
 
 function isCommentCreationRequest(normalized) {
@@ -3694,6 +3708,25 @@ function isCommentToTaskRequest(normalized) {
 
 function isCommentActionPlanRequest(normalized) {
   return normalized.includes("comentario") && (normalized.includes("foco") || normalized.includes("plan") || normalized.includes("pendiente"));
+}
+
+function isWeeklyPlanCreationRequest(normalized) {
+  return normalized.includes("plan semanal")
+    || normalized.includes("creame tres tareas")
+    || normalized.includes("crea tres tareas")
+    || normalized.includes("organiza mi semana")
+    || normalized.includes("monta mi semana");
+}
+
+function isMeetingPreparationRequest(normalized) {
+  return normalized.includes("reunion")
+    && (normalized.includes("preparame") || normalized.includes("prepara") || normalized.includes("guarda agenda") || normalized.includes("deja agenda") || normalized.includes("agenda para"))
+    && !isMeetingCreationRequest(normalized);
+}
+
+function isCommentResponseRequest(normalized) {
+  return normalized.includes("comentario")
+    && (normalized.includes("respuesta") || normalized.includes("responder") || normalized.includes("contestar") || normalized.includes("redacta"));
 }
 
 function buildProgressSummary() {
@@ -3817,6 +3850,192 @@ function buildSafetyReply() {
     `- Sincronización remota: ${auth.user ? (safety.lastRemoteSaveAt ? `última sync completa ${formatDateTime(safety.lastRemoteSaveAt)}` : auth.statusLabel) : "sin sesión remota, trabajando en local"}.`
   ];
   return `Estado de tranquilidad:\n${lines.join("\n")}\n\nMi recomendación: ${snapshot ? "antes de un cambio grande, exporta un respaldo además del punto local." : "crea ahora un punto de restauración y exporta un respaldo antes de tocar algo importante."}`;
+}
+
+function createWeeklyFocusTasksFromState() {
+  const candidates = buildWeeklyFocusTaskCandidates();
+  const created = [];
+
+  candidates.forEach((candidate) => {
+    if (!candidate?.title || taskExists(candidate.title)) return;
+    const task = {
+      id: createId("tk"),
+      title: candidate.title,
+      area: candidate.area,
+      status: candidate.status,
+      due: candidate.due,
+      effort: candidate.effort,
+      impact: candidate.impact,
+      done: false,
+      completedAt: ""
+    };
+    state.tasks.unshift(task);
+    created.push(task);
+  });
+
+  if (!created.length) {
+    return {
+      reply: "No he creado tareas nuevas porque el foco principal ya parece bastante representado en tu tablero. Si quieres, puedo revisar una reunión o un comentario concreto para afinar más."
+    };
+  }
+
+  const lines = created.map((task) => `- ${task.title}${task.due ? ` (${formatDate(task.due)})` : ""}`);
+  return {
+    reply: `He montado un mini plan semanal dentro de la app:\n${lines.join("\n")}\n\nLa idea es que esta semana no abras más de tres frentes: escritura, revisión y coordinación.`,
+    toastMessage: "Plan semanal creado desde TeDoc"
+  };
+}
+
+function buildWeeklyFocusTaskCandidates() {
+  const chapter = nextChapterToPush();
+  const comment = findUrgentComment();
+  const meeting = upcomingMeeting();
+  const candidates = [];
+
+  if (comment) {
+    candidates.push({
+      title: `Responder comentario: ${comment.chapter}`,
+      area: "Revisión",
+      status: inferTaskColumn(comment.due || ""),
+      due: comment.due || "",
+      effort: comment.priority === "Alta" ? "90 min" : "45 min",
+      impact: comment.priority === "Alta" ? "Alto" : "Medio"
+    });
+  }
+
+  if (chapter) {
+    const weakestSection = findWeakestSection(chapter);
+    candidates.push({
+      title: weakestSection
+        ? `Empujar ${chapter.title}: ${weakestSection.title}`
+        : `Empujar ${chapter.title}`,
+      area: "Capítulos",
+      status: inferTaskColumn(chapter.due || ""),
+      due: chapter.due || "",
+      effort: "90 min",
+      impact: "Alto"
+    });
+  }
+
+  if (meeting) {
+    candidates.push({
+      title: `Preparar reunión: ${meeting.type || "Seguimiento"}`,
+      area: "Reuniones",
+      status: inferTaskColumn(meeting.date || ""),
+      due: meeting.date || "",
+      effort: "30 min",
+      impact: "Medio"
+    });
+  }
+
+  if (!candidates.length) {
+    candidates.push({
+      title: "Definir primer bloque semanal de tesis",
+      area: "General",
+      status: "week",
+      due: offsetISODate(2),
+      effort: "45 min",
+      impact: "Medio"
+    });
+  }
+
+  return candidates.slice(0, 3);
+}
+
+function findWeakestSection(chapter) {
+  if (!chapter?.sections?.length) return null;
+  return [...chapter.sections].sort((a, b) => Number(a.words || 0) - Number(b.words || 0))[0];
+}
+
+function taskExists(title) {
+  const normalizedTitle = normalizeUserText(title);
+  return state.tasks.some((task) => normalizeUserText(task.title) === normalizedTitle);
+}
+
+function prepareMeetingBriefFromPrompt(message) {
+  const meeting = findMeetingFromPrompt(message);
+  if (!meeting) {
+    return { reply: "No encuentro una reunión próxima para preparar. Si quieres, puedo agendar una primero y luego dejarte la agenda guardada." };
+  }
+
+  const chapter = nextChapterToPush();
+  const comment = findUrgentComment();
+  const urgentTask = nextOpenTask();
+  const explicitTopic = extractTopic(message);
+  const agendaLines = [
+    explicitTopic ? `Tema central: ${capitalizeSentence(explicitTopic)}.` : "",
+    chapter ? `Estado del capítulo sensible: ${chapter.title} (${chapter.progress}%${chapter.due ? ` y entrega ${formatDate(chapter.due)}` : ""}).` : "",
+    comment ? `Comentario a resolver: ${comment.chapter}. ${comment.comment}` : "",
+    urgentTask ? `Tarea que conviene dejar cerrada: ${urgentTask.title}.` : "",
+    "Decisión que debe salir de la reunión: siguiente entregable y criterio de cierre."
+  ].filter(Boolean);
+  const taskLines = [
+    comment ? `Responder comentario de ${comment.chapter}` : "",
+    chapter ? `Empujar ${chapter.title}` : "",
+    urgentTask ? `Cerrar o replanificar ${urgentTask.title}` : ""
+  ].filter(Boolean);
+
+  meeting.agenda = agendaLines.join("\n");
+  meeting.tasks = taskLines.join("\n");
+  if (!meeting.next) {
+    meeting.next = chapter?.due || comment?.due || urgentTask?.due || "";
+  }
+
+  return {
+    reply: `He preparado y guardado una agenda para ${formatMeetingLabel(meeting)}.\n\nAgenda:\n${agendaLines.map((line) => `- ${line}`).join("\n")}\n\nLa tienes ya dentro de Reuniones y revisión.`,
+    toastMessage: "Agenda guardada desde TeDoc"
+  };
+}
+
+function prepareCommentResponseFromPrompt(message) {
+  const comment = findCommentFromPrompt(message);
+  if (!comment) {
+    return { reply: "No encuentro un comentario abierto para responder. Si quieres, dime el capítulo o registra primero el comentario." };
+  }
+
+  const chapter = state.chapters.find((item) => item.title === comment.chapter);
+  const response = buildCommentResponseDraft(comment, chapter);
+  comment.response = response;
+  if (comment.status === "Pendiente") comment.status = "En proceso";
+
+  return {
+    reply: `He redactado y guardado una respuesta de trabajo para el comentario de ${comment.chapter}:\n\n${response}\n\nLa tienes dentro de Reuniones y revisión para ajustarla si quieres.`,
+    toastMessage: "Respuesta al comentario guardada"
+  };
+}
+
+function buildCommentResponseDraft(comment, chapter) {
+  const focusSection = chapter ? findWeakestSection(chapter) : null;
+  const lines = [
+    `- Qué voy a corregir: ${comment.comment}`,
+    focusSection
+      ? `- Dónde tocar primero: ${chapter.title}, especialmente en "${focusSection.title}".`
+      : `- Dónde tocar primero: el apartado de ${comment.chapter} directamente afectado por el comentario.`,
+    chapter?.argument
+      ? `- Criterio de respuesta: reforzar el texto para que el argumento central quede explícito (${chapter.argument}).`
+      : "- Criterio de respuesta: dejar visible el cambio textual y la justificación académica del ajuste.",
+    "- Señal de cierre: el comentario solo pasa a resuelto cuando el cambio quede escrito y verificable, no solo pensado."
+  ];
+  return lines.join("\n");
+}
+
+function findCommentFromPrompt(message) {
+  const chapter = findChapterFromPrompt(message);
+  if (chapter) {
+    return [...state.reviewComments]
+      .find((item) => item.chapter === chapter.title && item.status !== "Resuelto") || null;
+  }
+  return findUrgentComment();
+}
+
+function findMeetingFromPrompt(message) {
+  const date = extractDateFromText(message);
+  const time = extractTimeFromText(message);
+  if (!date) return upcomingMeeting();
+  return [...state.meetings]
+    .sort((a, b) => `${a.date} ${a.time || "23:59"}`.localeCompare(`${b.date} ${b.time || "23:59"}`))
+    .find((meeting) => meeting.date === date && (!time || meeting.time === time))
+    || null;
 }
 
 function buildMeetingAdvice() {
@@ -4201,6 +4420,12 @@ function formatDateTime(value) {
 
 function escapeMultiline(value) {
   return escapeHtml(value).replaceAll("\n", "<br>");
+}
+
+function capitalizeSentence(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function metric(label, value, hint) {

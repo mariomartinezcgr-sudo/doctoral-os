@@ -1142,6 +1142,9 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "Cuando el usuario pida diagnóstico, prioridad o riesgo, responde en bloques cortos: Lectura rápida, Siguiente paso, Riesgo visible y Cierre.",
     "Cuando el usuario pida un plan, conviértelo en pasos cerrables de 20 a 45 minutos.",
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
+    "Si el usuario te pide preparar una reunión, guarda una agenda útil dentro de la reunión adecuada.",
+    "Si el usuario te pide responder a un comentario, guarda una respuesta de trabajo dentro del comentario correspondiente.",
+    "Si el usuario te pide plan semanal, puedes crear hasta tres tareas concretas usando varias llamadas de herramienta.",
     "Si el usuario pide convertir un comentario en tarea, usa la herramienta disponible.",
     "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
     "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
@@ -1345,6 +1348,40 @@ function assistantTools() {
     },
     {
       type: "function",
+      name: "update_meeting_brief",
+      description: "Guarda o actualiza la agenda y tareas de una reunión ya existente.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          date: { type: "string", description: "Fecha de la reunión YYYY-MM-DD o cadena vacía para usar la próxima reunión." },
+          time: { type: "string", description: "Hora HH:MM o cadena vacía si no hace falta distinguirla." },
+          agenda: { type: "string", description: "Agenda concreta a guardar." },
+          tasks: { type: "string", description: "Lista corta de tareas o seguimiento a guardar." },
+          next: { type: "string", description: "Siguiente hito o fecha siguiente en formato YYYY-MM-DD o cadena vacía." }
+        },
+        required: ["date", "time", "agenda", "tasks", "next"]
+      }
+    },
+    {
+      type: "function",
+      name: "update_review_comment_response",
+      description: "Guarda una respuesta de trabajo dentro de un comentario de revisión abierto.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chapter: { type: "string", description: "Capítulo del comentario o cadena vacía para usar el comentario más urgente." },
+          response: { type: "string", description: "Respuesta o plan de respuesta a guardar." },
+          status: { type: "string", description: "Estado nuevo, por ejemplo En proceso o Resuelto." }
+        },
+        required: ["chapter", "response", "status"]
+      }
+    },
+    {
+      type: "function",
       name: "convert_review_comment_to_task",
       description: "Convierte un comentario de revisión abierto en una tarea dentro del plan semanal.",
       strict: true,
@@ -1468,6 +1505,49 @@ function executeAssistantTool(state, call) {
     return { ok: true, note, chapter: chapter.title };
   }
 
+  if (call.name === "update_meeting_brief") {
+    const date = normalizeIsoDate(args.date);
+    const time = normalizeTime(args.time);
+    const meeting = findAssistantMeeting(state.meetings, date, time);
+    if (!meeting) return { ok: false, error: "No he encontrado la reunión que quieres preparar." };
+
+    const agenda = String(args.agenda || "").trim();
+    const tasks = String(args.tasks || "").trim();
+    if (!agenda) return { ok: false, error: "La agenda no puede quedar vacía." };
+    meeting.agenda = agenda;
+    meeting.tasks = tasks;
+    meeting.next = normalizeIsoDate(args.next) || "";
+    return {
+      ok: true,
+      meeting: {
+        date: meeting.date || "",
+        time: meeting.time || "",
+        type: meeting.type || "",
+        agenda: meeting.agenda || "",
+        tasks: meeting.tasks || "",
+        next: meeting.next || ""
+      }
+    };
+  }
+
+  if (call.name === "update_review_comment_response") {
+    const comment = findAssistantReviewComment(state.reviewComments, args.chapter);
+    if (!comment) return { ok: false, error: "No he encontrado un comentario abierto donde guardar la respuesta." };
+    const response = String(args.response || "").trim();
+    if (!response) return { ok: false, error: "La respuesta del comentario no puede quedar vacía." };
+    comment.response = response;
+    comment.status = String(args.status || comment.status || "En proceso").trim() || "En proceso";
+    return {
+      ok: true,
+      reviewComment: {
+        chapter: comment.chapter || "",
+        status: comment.status || "",
+        due: comment.due || "",
+        response: comment.response || ""
+      }
+    };
+  }
+
   if (call.name === "convert_review_comment_to_task") {
     const chapterTitle = String(args.chapter || "").trim();
     const comment = (Array.isArray(state.reviewComments) ? state.reviewComments : [])
@@ -1491,6 +1571,30 @@ function executeAssistantTool(state, call) {
   }
 
   return { ok: false, error: "Herramienta desconocida: " + call.name };
+}
+
+function findAssistantMeeting(meetings, date, time) {
+  const items = Array.isArray(meetings) ? [...meetings] : [];
+  if (date) {
+    return items
+      .sort((a, b) => `${a.date || ""} ${a.time || "23:59"}`.localeCompare(`${b.date || ""} ${b.time || "23:59"}`))
+      .find((meeting) => meeting.date === date && (!time || meeting.time === time)) || null;
+  }
+  const today = assistantTodayIso();
+  return items
+    .filter((meeting) => meeting.date && meeting.date >= today)
+    .sort((a, b) => `${a.date || ""} ${a.time || "23:59"}`.localeCompare(`${b.date || ""} ${b.time || "23:59"}`))[0] || null;
+}
+
+function findAssistantReviewComment(reviewComments, chapter) {
+  const items = (Array.isArray(reviewComments) ? reviewComments : [])
+    .filter((item) => normalizeReviewStatusName(item.status) !== "Resueltos");
+  const chapterTitle = String(chapter || "").trim();
+  if (!chapterTitle) {
+    return [...items]
+      .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+  }
+  return items.find((item) => normalizeChapterTitle(item.chapter) === normalizeChapterTitle(chapterTitle)) || null;
 }
 
 function parseJsonObject(value) {
