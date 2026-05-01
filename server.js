@@ -368,7 +368,8 @@ async function handleApi(req, res) {
     try {
       const baseState = body.state && typeof body.state === "object" ? body.state : getUserState(auth.user.id);
       const assistantState = normalizeAssistantState(cloneJson(baseState || {}));
-      const result = await runAssistantWithOpenAI(auth.user, assistantState, message);
+      const clientMeta = sanitizeAssistantClientMeta(body.clientMeta);
+      const result = await runAssistantWithOpenAI(auth.user, assistantState, message, clientMeta);
       const savedAt = saveUserState(auth.user.id, result.state);
       updateUserTimestamp(auth.user.id, savedAt);
       sendJson(res, 200, { ok: true, reply: result.reply, state: result.state, savedAt, model: result.model, mode: "openai" });
@@ -1064,7 +1065,7 @@ function normalizeAssistantState(state) {
   return next;
 }
 
-async function runAssistantWithOpenAI(user, state, message) {
+async function runAssistantWithOpenAI(user, state, message, clientMeta = {}) {
   const assistantState = normalizeAssistantState(state);
   const conversation = buildAssistantConversationInput(assistantState.assistantThread);
   const lastMessage = conversation[conversation.length - 1];
@@ -1072,7 +1073,7 @@ async function runAssistantWithOpenAI(user, state, message) {
     conversation.push({ role: "user", content: message });
   }
   const requestInput = [
-    { role: "developer", content: buildAssistantPrompt(user, assistantState) },
+    { role: "developer", content: buildAssistantPrompt(user, assistantState, clientMeta) },
     ...conversation
   ];
 
@@ -1130,17 +1131,25 @@ async function openAIResponsesCreate(payload) {
   return data;
 }
 
-function buildAssistantPrompt(user, state) {
+function buildAssistantPrompt(user, state, clientMeta = {}) {
   const context = buildAssistantContext(state);
+  const operations = buildAssistantOperationsSnapshot(state);
   return [
     "Eres TeDoc, el asistente de DoctoralOS, una app SaaS para doctorandos individuales.",
+    "Hoy es " + assistantTodayIso() + ".",
     "Responde siempre en español, con tono claro, práctico y breve.",
     "Tu trabajo es ayudar a terminar la tesis con menos caos.",
+    "Cuando el usuario pida diagnóstico, prioridad o riesgo, responde en bloques cortos: Lectura rápida, Siguiente paso, Riesgo visible y Cierre.",
+    "Cuando el usuario pida un plan, conviértelo en pasos cerrables de 20 a 45 minutos.",
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
+    "Si el usuario pide convertir un comentario en tarea, usa la herramienta disponible.",
     "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
     "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
+    "Si usas herramientas, guarda primero y después confirma exactamente qué has creado y dónde queda guardado.",
     "Si no hace falta herramienta, responde con consejo accionable y concreto.",
     "Usuario actual: " + user.name + " (" + user.email + ")",
+    "Resumen operativo actual: " + JSON.stringify(operations),
+    "Contexto de seguridad del cliente: " + JSON.stringify(clientMeta),
     "Contexto de tesis actual: " + JSON.stringify(context)
   ].join("\n\n");
 }
@@ -1202,6 +1211,58 @@ function buildAssistantContext(state) {
       sessionsLast7Days: sessionsLastDays(state.writingLog, 7)
     },
     analytics: buildAssistantAnalytics(state)
+  };
+}
+
+function sanitizeAssistantClientMeta(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    authStatus: String(input.authStatus || "").trim(),
+    lastLocalSaveAt: String(input.lastLocalSaveAt || "").trim(),
+    lastRemoteSaveAt: String(input.lastRemoteSaveAt || "").trim(),
+    lastSnapshotAt: String(input.lastSnapshotAt || "").trim(),
+    lastExportedAt: String(input.lastExportedAt || "").trim(),
+    lastRestoredAt: String(input.lastRestoredAt || "").trim(),
+    snapshotCount: Number.isFinite(Number(input.snapshotCount)) ? Number(input.snapshotCount) : 0,
+    demoMode: Boolean(input.demoMode)
+  };
+}
+
+function buildAssistantOperationsSnapshot(state) {
+  const nextTask = (Array.isArray(state.tasks) ? [...state.tasks] : [])
+    .filter((task) => !task.done)
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+  const nextMeeting = (Array.isArray(state.meetings) ? [...state.meetings] : [])
+    .filter((meeting) => meeting.date && meeting.date >= assistantTodayIso())
+    .sort((a, b) => `${a.date}T${a.time || "23:59"}`.localeCompare(`${b.date}T${b.time || "23:59"}`))[0] || null;
+  const urgentComment = (Array.isArray(state.reviewComments) ? [...state.reviewComments] : [])
+    .filter((comment) => normalizeReviewStatusName(comment.status) !== "Resueltos")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+  const focusChapter = assistantStalledChapter(state.chapters);
+
+  return {
+    nextTask: nextTask ? {
+      title: nextTask.title || "",
+      due: nextTask.due || "",
+      area: nextTask.area || "",
+      impact: nextTask.impact || ""
+    } : null,
+    nextMeeting: nextMeeting ? {
+      date: nextMeeting.date || "",
+      time: nextMeeting.time || "",
+      type: nextMeeting.type || "",
+      attendees: nextMeeting.attendees || ""
+    } : null,
+    urgentComment: urgentComment ? {
+      chapter: urgentComment.chapter || "",
+      due: urgentComment.due || "",
+      priority: urgentComment.priority || ""
+    } : null,
+    focusChapter: focusChapter ? {
+      title: focusChapter.title || "",
+      progress: Number(focusChapter.progress || 0),
+      due: focusChapter.due || ""
+    } : null
   };
 }
 
@@ -1280,6 +1341,24 @@ function assistantTools() {
           text: { type: "string", description: "Contenido de la nota." }
         },
         required: ["chapter", "title", "type", "date", "text"]
+      }
+    },
+    {
+      type: "function",
+      name: "convert_review_comment_to_task",
+      description: "Convierte un comentario de revisión abierto en una tarea dentro del plan semanal.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chapter: { type: "string", description: "Capítulo del comentario que se quiere convertir en tarea." },
+          title: { type: "string", description: "Título de la tarea a crear." },
+          due: { type: "string", description: "Fecha límite YYYY-MM-DD o cadena vacía para usar la del comentario." },
+          effort: { type: "string", description: "Esfuerzo estimado, por ejemplo 45 min o 90 min." },
+          impact: { type: "string", enum: ["Bajo", "Medio", "Alto"], description: "Impacto esperado de cerrar esa tarea." }
+        },
+        required: ["chapter", "title", "due", "effort", "impact"]
       }
     }
   ];
@@ -1387,6 +1466,28 @@ function executeAssistantTool(state, call) {
     chapter.notes.unshift(note);
     chapter.editorUpdatedAt = new Date().toISOString();
     return { ok: true, note, chapter: chapter.title };
+  }
+
+  if (call.name === "convert_review_comment_to_task") {
+    const chapterTitle = String(args.chapter || "").trim();
+    const comment = (Array.isArray(state.reviewComments) ? state.reviewComments : [])
+      .find((item) => normalizeReviewStatusName(item.status) !== "Resueltos" && normalizeChapterTitle(item.chapter) === normalizeChapterTitle(chapterTitle));
+    if (!comment) return { ok: false, error: "No he encontrado un comentario abierto de ese capítulo." };
+
+    const due = normalizeIsoDate(args.due) || normalizeIsoDate(comment.due);
+    const title = String(args.title || `Resolver comentario: ${comment.chapter}`).trim() || `Resolver comentario: ${comment.chapter}`;
+    const task = {
+      id: createEntityId("tk"),
+      title,
+      area: "Revisión",
+      status: inferTaskStatusFromDue(due),
+      due,
+      effort: String(args.effort || (comment.priority === "Alta" ? "90 min" : "45 min")).trim() || "45 min",
+      impact: ["Bajo", "Medio", "Alto"].includes(args.impact) ? args.impact : (comment.priority === "Alta" ? "Alto" : "Medio")
+    };
+    state.tasks.unshift(task);
+    if (normalizeReviewStatusName(comment.status) === "Pendientes") comment.status = "En proceso";
+    return { ok: true, task, comment: { chapter: comment.chapter, due: comment.due || "" } };
   }
 
   return { ok: false, error: "Herramienta desconocida: " + call.name };

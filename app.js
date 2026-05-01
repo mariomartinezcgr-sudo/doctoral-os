@@ -1,8 +1,14 @@
 const STORAGE_KEY = "doctoral-os-state-v1";
 const DEMO_STORAGE_KEY = "doctoral-os-demo-state-v1";
+const SNAPSHOT_STORAGE_KEY = "doctoral-os-snapshots-v1";
+const DEMO_SNAPSHOT_STORAGE_KEY = "doctoral-os-demo-snapshots-v1";
+const SAFETY_META_STORAGE_KEY = "doctoral-os-safety-v1";
+const DEMO_SAFETY_META_STORAGE_KEY = "doctoral-os-demo-safety-v1";
 const DEMO_QUERY_PARAM = "demo";
 const NEXT_QUERY_PARAM = "next";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
+const MAX_LOCAL_SNAPSHOTS = 6;
+const SNAPSHOT_INTERVAL_MS = 12 * 60 * 1000;
 const DEFAULT_CHECKLIST_ITEMS = [
   "Objetivo del capítulo explícito",
   "Argumento central defendible",
@@ -93,6 +99,7 @@ const defaultState = {
 
 let demoMode = isDemoRequested();
 let state = loadState();
+let safety = loadSafetyMeta();
 let auth = {
   user: null,
   status: API_ENABLED ? "checking" : "file",
@@ -175,6 +182,69 @@ function isDemoRequested() {
 
 function activeStorageKey() {
   return demoMode ? DEMO_STORAGE_KEY : STORAGE_KEY;
+}
+
+function activeSnapshotStorageKey() {
+  return demoMode ? DEMO_SNAPSHOT_STORAGE_KEY : SNAPSHOT_STORAGE_KEY;
+}
+
+function activeSafetyMetaStorageKey() {
+  return demoMode ? DEMO_SAFETY_META_STORAGE_KEY : SAFETY_META_STORAGE_KEY;
+}
+
+function defaultSafetyMeta() {
+  return {
+    lastLocalSaveAt: "",
+    lastRemoteSaveAt: "",
+    lastSnapshotAt: "",
+    lastSnapshotReason: "",
+    lastExportedAt: "",
+    lastRestoredAt: "",
+    lastSnapshotHash: ""
+  };
+}
+
+function loadSafetyMeta() {
+  try {
+    const raw = localStorage.getItem(activeSafetyMetaStorageKey());
+    if (!raw) return defaultSafetyMeta();
+    return { ...defaultSafetyMeta(), ...(JSON.parse(raw) || {}) };
+  } catch (error) {
+    console.warn("No se pudo cargar la meta de seguridad", error);
+    return defaultSafetyMeta();
+  }
+}
+
+function persistSafetyMeta() {
+  try {
+    localStorage.setItem(activeSafetyMetaStorageKey(), JSON.stringify(safety));
+  } catch (error) {
+    console.warn("No se pudo guardar la meta de seguridad", error);
+  }
+}
+
+function updateSafetyMeta(patch = {}) {
+  safety = { ...defaultSafetyMeta(), ...safety, ...patch };
+  persistSafetyMeta();
+}
+
+function loadSnapshots() {
+  try {
+    const raw = localStorage.getItem(activeSnapshotStorageKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn("No se pudieron cargar los puntos de restauración", error);
+    return [];
+  }
+}
+
+function persistSnapshots(snapshots) {
+  try {
+    localStorage.setItem(activeSnapshotStorageKey(), JSON.stringify(Array.isArray(snapshots) ? snapshots.slice(0, MAX_LOCAL_SNAPSHOTS) : []));
+  } catch (error) {
+    console.warn("No se pudieron guardar los puntos de restauración", error);
+  }
 }
 
 function clearDemoQuery() {
@@ -604,10 +674,100 @@ function deepMerge(base, saved) {
 
 function saveState(message = "Guardado", options = {}) {
   ensureStateShape(state);
-  localStorage.setItem(activeStorageKey(), JSON.stringify(state));
+  const serializedState = JSON.stringify(state);
+  localStorage.setItem(activeStorageKey(), serializedState);
+  updateSafetyMeta({ lastLocalSaveAt: new Date().toISOString() });
+  maybeCreateSafetySnapshot(serializedState, message, options);
   updateSidebar();
   if (!options.skipSync) scheduleSync();
   if (message) showToast(message);
+}
+
+function maybeCreateSafetySnapshot(serializedState, message, options = {}) {
+  if (options.skipSnapshot) return;
+  const reason = String(options.snapshotReason || message || "").trim();
+  if (!reason && !options.forceSnapshot) return;
+
+  const snapshots = loadSnapshots();
+  const hash = hashText(serializedState);
+  const latest = snapshots[0];
+  if (latest?.hash === hash) return;
+
+  const now = Date.now();
+  const latestCreatedAt = latest?.createdAt ? new Date(latest.createdAt).getTime() : 0;
+  const needsPrioritySnapshot = options.forceSnapshot || isPrioritySnapshotReason(reason);
+  if (!needsPrioritySnapshot && latestCreatedAt && now - latestCreatedAt < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  const createdAt = new Date(now).toISOString();
+  const snapshot = {
+    id: createId("snap"),
+    createdAt,
+    reason: reason || "Punto de restauración automático",
+    summary: buildSnapshotSummary(),
+    hash,
+    state: JSON.parse(serializedState)
+  };
+  persistSnapshots([snapshot, ...snapshots]);
+  updateSafetyMeta({
+    lastSnapshotAt: createdAt,
+    lastSnapshotReason: snapshot.reason,
+    lastSnapshotHash: hash
+  });
+}
+
+function isPrioritySnapshotReason(reason) {
+  const normalized = normalizeUserText(reason);
+  return [
+    "eliminado",
+    "importado",
+    "restaurado",
+    "reiniciada",
+    "cerrada",
+    "creado",
+    "guardado",
+    "actualizado"
+  ].some((token) => normalized.includes(token));
+}
+
+function hashText(text) {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash) + text.charCodeAt(index);
+  }
+  return String(hash >>> 0);
+}
+
+function buildSnapshotSummary() {
+  const chapterCount = state.chapters.length;
+  const activeTasks = state.tasks.filter((task) => !task.done).length;
+  const openComments = state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
+  const words = state.chapters.reduce((sum, chapter) => sum + Number(chapter.words || 0), 0);
+  return `${chapterCount} cap., ${activeTasks} tareas, ${openComments} comentarios, ${formatNumber(words)} palabras`;
+}
+
+function latestSnapshotRecord() {
+  return loadSnapshots()[0] || null;
+}
+
+function restoreLatestSnapshot() {
+  const snapshot = latestSnapshotRecord();
+  if (!snapshot) {
+    showToast("Todavía no hay punto de restauración");
+    return;
+  }
+
+  const confirmed = window.confirm(`Vas a restaurar el punto guardado el ${formatDateTime(snapshot.createdAt)}.\n\n${snapshot.summary}\n\nLa app volverá a ese estado y se sincronizará de nuevo si tienes sesión iniciada.`);
+  if (!confirmed) return;
+
+  state = ensureStateShape(deepMerge(structuredClone(defaultState), snapshot.state || {}));
+  updateSafetyMeta({ lastRestoredAt: new Date().toISOString() });
+  saveState("Restaurado desde punto local", {
+    forceSnapshot: true,
+    snapshotReason: `Restaurado desde ${formatDateTime(snapshot.createdAt)}`
+  });
+  render();
 }
 
 function showToast(message) {
@@ -622,7 +782,9 @@ function updateAuthUI() {
 
   if (!API_ENABLED) {
     syncStatus.textContent = "Archivo local";
-    syncStatus.title = "Abre la app desde el servidor local para usar cuentas y sincronizacion.";
+    syncStatus.title = safety.lastLocalSaveAt
+      ? `Último guardado local ${formatDateTime(safety.lastLocalSaveAt)}. Abre la app desde el servidor para usar cuentas y sincronización.`
+      : "Abre la app desde el servidor local para usar cuentas y sincronizacion.";
     authLabel.textContent = "Sin backend";
     logoutButton.hidden = true;
     return;
@@ -631,7 +793,9 @@ function updateAuthUI() {
   if (auth.user) {
     const label = auth.status === "synced" && auth.lastSync ? `Sync ${auth.lastSync}` : auth.statusLabel || "Sincronizando";
     syncStatus.textContent = label;
-    syncStatus.title = "Pulsa para sincronizar ahora.";
+    syncStatus.title = safety.lastRemoteSaveAt
+      ? `Última sincronización completa ${formatDateTime(safety.lastRemoteSaveAt)}. Pulsa para sincronizar ahora.`
+      : "Pulsa para sincronizar ahora.";
     authLabel.textContent = auth.user.name || auth.user.email;
     logoutButton.hidden = false;
     return;
@@ -1352,6 +1516,7 @@ function applySession(result) {
   if (demoMode) {
     demoMode = false;
     clearDemoQuery();
+    safety = loadSafetyMeta();
   }
   updateAuthUI();
 }
@@ -1415,6 +1580,7 @@ async function syncNow(showMessage = true) {
     auth.status = "synced";
     auth.lastSync = shortTime();
     auth.statusLabel = "Sincronizado";
+    updateSafetyMeta({ lastRemoteSaveAt: result.savedAt || new Date().toISOString() });
     updateAuthUI();
     if (showMessage) showToast("Sincronizado");
   } catch (error) {
@@ -1507,6 +1673,26 @@ function handleScreenClick(event) {
     return;
   }
 
+  if (action === "assistant-snapshot") {
+    saveState("Punto de restauración creado", {
+      skipSync: true,
+      forceSnapshot: true,
+      snapshotReason: "Punto de restauración manual"
+    });
+    render();
+    return;
+  }
+
+  if (action === "assistant-restore-latest") {
+    restoreLatestSnapshot();
+    return;
+  }
+
+  if (action === "assistant-export") {
+    exportData();
+    return;
+  }
+
   if (action === "analytics-range") {
     state.analyticsRange = target.dataset.value === "day" ? "day" : "week";
     saveState("", { skipSync: true });
@@ -1518,6 +1704,7 @@ function handleScreenClick(event) {
     demoMode = false;
     clearDemoQuery();
     state = loadState();
+    safety = loadSafetyMeta();
     saveState("Demo cerrada", { skipSync: true });
     render();
     return;
@@ -3104,10 +3291,10 @@ function renderForum() {
 function renderAssistant() {
   const suggestions = assistantSuggestions();
   const assistantModeText = assistantCanUseRemote()
-    ? "TeDoc intentará usar IA si está disponible y, si no, volverá al modo local sin romper tu trabajo."
+    ? "TeDoc puede usar IA, guardar acciones dentro de la app y volver al modo local si el servidor no responde."
     : demoMode
       ? "Demo guiada activa. Las acciones se guardan dentro de esta tesis de ejemplo."
-      : "Modo local activo. Puedes trabajar con TeDoc ahora y activar la IA más adelante cuando conectes OpenAI.";
+      : "Modo local activo. Puedes trabajar con TeDoc ahora, mantener puntos de restauración locales y activar la IA más adelante.";
 
   screen.innerHTML = `
     <section class="assistant-layout">
@@ -3120,6 +3307,8 @@ function renderAssistant() {
           </div>
           <button class="ghost-button" data-action="assistant-clear" type="button"><span data-icon="trash"></span>Reiniciar chat</button>
         </div>
+
+        ${renderAssistantBriefing()}
 
         <div class="assistant-thread">
           ${state.assistantThread.map((message) => renderAssistantMessage(message)).join("")}
@@ -3142,12 +3331,16 @@ function renderAssistant() {
           </div>
         </div>
 
+        ${renderAssistantSafetyCard()}
+
         <article class="card">
           <p class="card-kicker">Puede hacer ahora</p>
           <h2>Lo más útil en esta v1</h2>
           <ul class="quality-list compact-list">
             <li>Resumir progreso y detectar cuellos de botella</li>
             <li>Priorizar la semana según tareas, comentarios y fechas</li>
+            <li>Detectar riesgos visibles antes de una entrega</li>
+            <li>Proponer un plan de arranque de 45 minutos</li>
             <li>Crear tareas desde lenguaje natural</li>
             <li>Agendar reuniones con fecha y hora</li>
             <li>Registrar notas y comentarios de revisión</li>
@@ -3170,6 +3363,144 @@ function renderAssistantMessage(message) {
     </article>`;
 }
 
+function renderAssistantBriefing() {
+  const analytics = buildAnalyticsSnapshot();
+  const urgentTask = nextOpenTask();
+  const urgentComment = findUrgentComment();
+  const chapter = nextChapterToPush();
+  const meeting = upcomingMeeting();
+  const latestSnapshot = latestSnapshotRecord();
+  const nextMoveTitle = urgentTask ? urgentTask.title : chapter ? chapter.title : "Aterriza una primera sesión";
+  const nextMoveMeta = [
+    urgentTask?.due ? `Vence ${formatDate(urgentTask.due)}` : chapter?.due ? `Entrega ${formatDate(chapter.due)}` : "Sin fecha inmediata",
+    urgentTask ? escapeHtml(urgentTask.area) : chapter ? `${chapter.progress}% de avance` : "Primer arranque"
+  ];
+  const rhythmLine = analytics.wordsLast7
+    ? `${formatNumber(analytics.wordsLast7)} palabras en 7 días y ${analytics.writingTrend.toLowerCase()}.`
+    : "No hay escritura reciente registrada; conviene reactivar una sesión pequeña antes de abrir más frentes.";
+  const calmLine = latestSnapshot
+    ? `Último punto de restauración ${formatDateTime(latestSnapshot.createdAt)}.`
+    : "Todavía no hay punto de restauración local; puedes crear uno ahora mismo.";
+
+  return `
+    <section class="assistant-brief-grid">
+      <article class="assistant-brief-card">
+        <p class="card-kicker">Siguiente jugada</p>
+        <h3>${escapeHtml(nextMoveTitle)}</h3>
+        <p>${escapeHtml(`TeDoc te llevaría ahora a ${recommendNextMove()} para reducir fricción y recuperar continuidad real.`)}</p>
+        <div class="assistant-brief-meta">
+          ${nextMoveMeta.map((item) => `<span>${item}</span>`).join("")}
+        </div>
+        <button class="ghost-button" data-action="assistant-suggest" data-message="Dame un plan de arranque de 45 minutos para hoy" type="button">Plan de 45 min</button>
+      </article>
+
+      <article class="assistant-brief-card">
+        <p class="card-kicker">Radar visible</p>
+        <h3>${escapeHtml(buildAssistantRiskHeadline(analytics, urgentComment, meeting))}</h3>
+        <p>${escapeHtml(buildAssistantRiskLine(analytics, urgentTask, urgentComment, chapter, meeting))}</p>
+        <div class="assistant-brief-meta">
+          <span>${openReviewCount()} comentarios vivos</span>
+          <span>${analytics.tasksOverdue} tareas vencidas</span>
+        </div>
+        <button class="ghost-button" data-action="assistant-suggest" data-message="Detecta mis riesgos de entrega ahora mismo" type="button">Ver riesgos</button>
+      </article>
+
+      <article class="assistant-brief-card">
+        <p class="card-kicker">Tranquilidad operativa</p>
+        <h3>${escapeHtml(buildSafetyHeadline())}</h3>
+        <p>${escapeHtml(`${calmLine} ${rhythmLine}`)}</p>
+        <div class="assistant-brief-meta">
+          <span>${safety.lastLocalSaveAt ? `Guardado ${formatDateTime(safety.lastLocalSaveAt)}` : "Sin guardado reciente"}</span>
+          <span>${auth.user ? (safety.lastRemoteSaveAt ? `Sync ${formatDateTime(safety.lastRemoteSaveAt)}` : auth.statusLabel) : "Modo local"}</span>
+        </div>
+        <button class="ghost-button" data-action="assistant-snapshot" type="button">Crear punto ahora</button>
+      </article>
+    </section>
+  `;
+}
+
+function renderAssistantSafetyCard() {
+  const latestSnapshot = latestSnapshotRecord();
+  const snapshotCount = loadSnapshots().length;
+  return `
+    <article class="card assistant-safety-card">
+      <p class="card-kicker">Seguridad y tranquilidad</p>
+      <h2>Tu trabajo deja un rastro recuperable</h2>
+      <div class="assistant-safety-list">
+        <div>
+          <strong>${safety.lastLocalSaveAt ? formatDateTime(safety.lastLocalSaveAt) : "Pendiente"}</strong>
+          <span>Último guardado local</span>
+        </div>
+        <div>
+          <strong>${safety.lastSnapshotAt ? formatDateTime(safety.lastSnapshotAt) : "Sin punto aún"}</strong>
+          <span>${snapshotCount} punto${snapshotCount === 1 ? "" : "s"} de restauración</span>
+        </div>
+        <div>
+          <strong>${safety.lastExportedAt ? formatDateTime(safety.lastExportedAt) : "Todavía no"}</strong>
+          <span>Último respaldo exportado</span>
+        </div>
+        <div>
+          <strong>${auth.user ? (safety.lastRemoteSaveAt ? formatDateTime(safety.lastRemoteSaveAt) : auth.statusLabel) : "Local"}</strong>
+          <span>${auth.user ? "Última sincronización remota" : "Sesión sin backend"}</span>
+        </div>
+      </div>
+      <p class="muted">Los puntos de restauración se guardan en este navegador cuando detectamos cambios relevantes. Si quieres máxima calma, exporta un respaldo antes de una edición grande.</p>
+      <div class="summary-actions assistant-safety-actions">
+        <button class="ghost-button" data-action="assistant-snapshot" type="button">Crear punto ahora</button>
+        <button class="ghost-button" data-action="assistant-export" type="button">Exportar respaldo</button>
+        <button class="ghost-button" data-action="assistant-restore-latest" type="button" ${latestSnapshot ? "" : "disabled"}>Restaurar último</button>
+      </div>
+      ${latestSnapshot ? `<p class="assistant-safety-note">Último punto: ${escapeHtml(latestSnapshot.summary)}</p>` : ""}
+    </article>
+  `;
+}
+
+function buildAssistantClientMeta() {
+  return {
+    authStatus: auth.status,
+    lastLocalSaveAt: safety.lastLocalSaveAt,
+    lastRemoteSaveAt: safety.lastRemoteSaveAt,
+    lastSnapshotAt: safety.lastSnapshotAt,
+    lastExportedAt: safety.lastExportedAt,
+    lastRestoredAt: safety.lastRestoredAt,
+    snapshotCount: loadSnapshots().length,
+    demoMode
+  };
+}
+
+function buildAssistantRiskHeadline(analytics, urgentComment, meeting) {
+  if (analytics.tasksOverdue) return "Hay ruido vencido que conviene limpiar";
+  if (urgentComment) return `Feedback pendiente en ${urgentComment.chapter}`;
+  if (analytics.stalledChapter) return `${analytics.stalledChapter.title} merece protección`;
+  if (meeting) return "La próxima reunión pide contexto claro";
+  return "Buen momento para consolidar continuidad";
+}
+
+function buildAssistantRiskLine(analytics, urgentTask, urgentComment, chapter, meeting) {
+  if (analytics.tasksOverdue) {
+    return `Tienes ${analytics.tasksOverdue} tarea${analytics.tasksOverdue === 1 ? "" : "s"} vencida${analytics.tasksOverdue === 1 ? "" : "s"}. Antes de abrir más trabajo, limpia ese retraso para bajar ansiedad operativa.`;
+  }
+  if (urgentComment) {
+    return `El comentario más sensible ahora mismo está en ${urgentComment.chapter}${urgentComment.due ? ` y apunta al ${formatDate(urgentComment.due)}` : ""}. Conviene convertirlo pronto en respuesta o tarea.`;
+  }
+  if (chapter) {
+    return `${chapter.title} va por ${chapter.progress}%${chapter.due ? ` y entrega ${formatDate(chapter.due)}` : ""}. La mejor protección ahora es dejar una sección o decisión realmente cerrada.`;
+  }
+  if (meeting) {
+    return `Tienes una reunión próxima (${formatMeetingLabel(meeting)}). Merece la pena entrar con un punto bloqueado, una decisión y un siguiente entregable visibles.`;
+  }
+  if (!analytics.wordsLast7) {
+    return "No hay escritura reciente. El riesgo no es técnico: es perder continuidad. Una sesión pequeña hoy cambia bastante el cuadro.";
+  }
+  return "No veo un riesgo crítico inmediato; ahora el valor está en sostener el ritmo sin dispersarte.";
+}
+
+function buildSafetyHeadline() {
+  if (auth.user && safety.lastRemoteSaveAt && safety.lastSnapshotAt) return "Guardado local y sincronización en marcha";
+  if (safety.lastSnapshotAt) return "Ya tienes red de seguridad local";
+  return "Conviene crear tu primer punto de restauración";
+}
+
 function createInitialAssistantThread() {
   const intro = demoMode
     ? `Estás en la demo guiada de DoctoralOS. Te recomiendo este recorrido corto:
@@ -3180,11 +3511,14 @@ function createInitialAssistantThread() {
 Prueba algo como:
 - Resúmeme el progreso actual
 - Qué debería priorizar esta semana
+- Detecta mis riesgos de entrega ahora mismo
 - Prepara una agenda breve para la reunión con la directora`
     : `Soy TeDoc, el asistente de DoctoralOS. Puedo resumir tu progreso, sugerir prioridades, crear tareas y agendar reuniones dentro de la app.
 
 Prueba algo como:
 - Qué debería priorizar esta semana
+- Dame un plan de arranque de 45 minutos para hoy
+- Detecta mis riesgos de entrega ahora mismo
 - Crear tarea cerrar comentarios del capítulo 2 para mañana
 - Agendar reunión el viernes a las 16:00 con directora sobre metodología`;
 
@@ -3204,8 +3538,13 @@ function assistantSuggestions() {
   return [
     "Qué debería priorizar esta semana",
     "Resúmeme el progreso actual",
+    "Dame un plan de arranque de 45 minutos para hoy",
+    "Detecta mis riesgos de entrega ahora mismo",
+    "Convierte mis comentarios pendientes en foco de esta semana",
+    "Cómo de seguro está mi trabajo ahora mismo",
     "Analiza mi ritmo de escritura de las últimas semanas",
     "Dónde está mi cuello de botella ahora mismo",
+    "Qué necesito llevar a la próxima reunión",
     "Agendar reunión el viernes a las 16:00 con directora sobre metodología",
     "Crear tarea cerrar comentarios del capítulo 2 para mañana"
   ];
@@ -3257,7 +3596,7 @@ async function requestAssistantReply(message) {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, state })
+    body: JSON.stringify({ message, state, clientMeta: buildAssistantClientMeta() })
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "TeDoc no está disponible ahora mismo");
@@ -3265,6 +3604,7 @@ async function requestAssistantReply(message) {
   auth.status = "synced";
   auth.statusLabel = "Sincronizado";
   auth.lastSync = shortTime();
+  updateSafetyMeta({ lastRemoteSaveAt: result.savedAt || new Date().toISOString() });
   updateAuthUI();
   return result;
 }
@@ -3279,12 +3619,17 @@ function buildAssistantReply(message) {
   const normalized = normalizeUserText(message);
 
   if (/^(hola|buenas|hey|hi)\b/.test(normalized)) {
-    return { reply: "Hola. Estoy dentro de tu espacio de tesis y puedo ayudarte con prioridades, capítulos, tareas y reuniones. Si quieres, empieza por preguntarme qué deberías hacer esta semana." };
+    return { reply: "Hola. Estoy dentro de tu espacio de tesis y puedo ayudarte con prioridades, capítulos, tareas, reuniones y un pequeño radar de tranquilidad. Si quieres, empieza por preguntarme qué deberías hacer esta semana o qué riesgo ves ahora mismo." };
   }
 
   if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
   if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
   if (isPerformanceAdviceRequest(normalized)) return { reply: buildPerformanceAdvice() };
+  if (isRiskRequest(normalized)) return { reply: buildRiskRadar() };
+  if (isWarmStartRequest(normalized)) return { reply: buildWarmStartPlan() };
+  if (isSafetyRequest(normalized)) return { reply: buildSafetyReply() };
+  if (isCommentToTaskRequest(normalized)) return convertCommentToTaskFromPrompt(message);
+  if (isCommentActionPlanRequest(normalized)) return { reply: buildCommentActionPlan() };
   if (isMeetingCreationRequest(normalized)) return createMeetingFromPrompt(message);
   if (isTaskCreationRequest(normalized)) return createTaskFromPrompt(message);
   if (isCommentCreationRequest(normalized)) return createReviewCommentFromPrompt(message);
@@ -3295,7 +3640,7 @@ function buildAssistantReply(message) {
   if (chapter) return { reply: buildChapterAdvice(chapter) };
 
   return {
-    reply: "Puedo ayudarte con cuatro cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
+    reply: "Puedo ayudarte con seis cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, detectar riesgos, proponerte un arranque de 45 minutos, crear tareas y agendar reuniones.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Detecta mis riesgos de entrega ahora mismo\n- Dame un plan de arranque de 45 minutos para hoy\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
   };
 }
 
@@ -3329,6 +3674,26 @@ function isMeetingAdviceRequest(normalized) {
 
 function isPerformanceAdviceRequest(normalized) {
   return normalized.includes("ritmo") || normalized.includes("rendimiento") || normalized.includes("cuello de botella") || normalized.includes("atascado") || normalized.includes("analiza") || normalized.includes("productividad");
+}
+
+function isRiskRequest(normalized) {
+  return normalized.includes("riesgo") || normalized.includes("riesgos") || normalized.includes("entrega") || normalized.includes("expuesto") || normalized.includes("puede salir mal");
+}
+
+function isWarmStartRequest(normalized) {
+  return normalized.includes("45 minutos") || normalized.includes("arranque") || normalized.includes("empezar ahora") || normalized.includes("bloque corto") || normalized.includes("plan corto");
+}
+
+function isSafetyRequest(normalized) {
+  return normalized.includes("seguridad") || normalized.includes("respaldo") || normalized.includes("backup") || normalized.includes("copia") || normalized.includes("seguro esta mi trabajo") || normalized.includes("seguro está mi trabajo");
+}
+
+function isCommentToTaskRequest(normalized) {
+  return normalized.includes("comentario") && normalized.includes("tarea") && (normalized.includes("convierte") || normalized.includes("convertir") || normalized.includes("pasa"));
+}
+
+function isCommentActionPlanRequest(normalized) {
+  return normalized.includes("comentario") && (normalized.includes("foco") || normalized.includes("plan") || normalized.includes("pendiente"));
 }
 
 function buildProgressSummary() {
@@ -3384,6 +3749,74 @@ function buildPerformanceAdvice() {
     lines.push(`- Hay ${analytics.tasksOverdue} tarea${analytics.tasksOverdue === 1 ? "" : "s"} vencida${analytics.tasksOverdue === 1 ? "" : "s"}.`);
   }
   return `Lectura de rendimiento:\n${lines.join("\n")}\n\nMi recomendación: ${buildAnalyticsLead(analytics)}`;
+}
+
+function buildRiskRadar() {
+  const analytics = buildAnalyticsSnapshot();
+  const urgentTask = nextOpenTask();
+  const urgentComment = findUrgentComment();
+  const chapter = nextChapterToPush();
+  const meeting = upcomingMeeting();
+  const lines = [];
+
+  if (analytics.tasksOverdue) {
+    lines.push(`- Hay ${analytics.tasksOverdue} tarea${analytics.tasksOverdue === 1 ? "" : "s"} vencida${analytics.tasksOverdue === 1 ? "" : "s"}. Ese ruido suele multiplicar sensación de descontrol.`);
+  }
+  if (urgentComment) {
+    lines.push(`- Comentario más sensible: ${urgentComment.chapter}${urgentComment.due ? ` con fecha ${formatDate(urgentComment.due)}` : ""}. Conviene transformarlo ya en respuesta o tarea.`);
+  }
+  if (chapter) {
+    lines.push(`- Capítulo más expuesto: ${chapter.title} (${chapter.progress}%${chapter.due ? `, entrega ${formatDate(chapter.due)}` : ""}).`);
+  }
+  if (meeting) {
+    lines.push(`- Próxima reunión: ${formatMeetingLabel(meeting)}. Entra con una decisión concreta y no solo con avances dispersos.`);
+  }
+  if (urgentTask) {
+    lines.push(`- Tarea que más te ordena ahora: ${urgentTask.title}${urgentTask.due ? ` antes del ${formatDate(urgentTask.due)}` : ""}.`);
+  }
+  if (!lines.length) {
+    lines.push("- No veo un riesgo crítico inmediato. El riesgo real ahora sería abrir más frentes sin cerrar una siguiente acción visible.");
+  }
+
+  return `Radar de riesgo:\n${lines.join("\n")}\n\nMi recomendación: ${buildAnalyticsLead(analytics)}`;
+}
+
+function buildWarmStartPlan() {
+  const urgentTask = nextOpenTask();
+  const chapter = nextChapterToPush();
+  const urgentComment = findUrgentComment();
+  const lines = [
+    `- Min 0-10: reabre ${urgentTask ? `"${urgentTask.title}"` : chapter ? chapter.title : "tu capítulo principal"} y define una sola micro-meta cerrable.`,
+    `- Min 10-30: trabaja en ${urgentComment ? `la respuesta al comentario de ${urgentComment.chapter}` : chapter ? `la parte más floja de ${chapter.title}` : "un párrafo o decisión concreta"} sin abrir lecturas nuevas.`,
+    `- Min 30-45: deja salida preparada. Crea o ajusta una tarea con fecha y anota qué queda vivo para la siguiente sesión.`
+  ];
+  return `Plan de arranque de 45 minutos:\n${lines.join("\n")}\n\nRegla simple: acaba con una siguiente acción visible, no con una sensación difusa de haber avanzado.`;
+}
+
+function buildCommentActionPlan() {
+  const comment = findUrgentComment();
+  if (!comment) {
+    return "No veo comentarios pendientes ahora mismo. Si quieres, puedo ayudarte a convertir una reunión o una nota en una tarea semanal concreta.";
+  }
+
+  const lines = [
+    `- Comentario a convertir: ${comment.comment}`,
+    `- Capítulo afectado: ${comment.chapter}.`,
+    `- Primer movimiento: redacta una respuesta tentativa o crea una tarea específica para cerrar el punto.`,
+    `- Criterio de cierre: deja visible qué evidencia, texto o decisión haría que este comentario pase a resuelto.`
+  ];
+  return `Foco de revisión:\n${lines.join("\n")}\n\nSi quieres, también puedo convertir este comentario en tarea desde aquí.`;
+}
+
+function buildSafetyReply() {
+  const snapshot = latestSnapshotRecord();
+  const lines = [
+    `- Último guardado local: ${safety.lastLocalSaveAt ? formatDateTime(safety.lastLocalSaveAt) : "todavía no visible"}.`,
+    `- Último punto de restauración: ${snapshot ? `${formatDateTime(snapshot.createdAt)} (${snapshot.summary})` : "todavía no creado"}.`,
+    `- Último respaldo exportado: ${safety.lastExportedAt ? formatDateTime(safety.lastExportedAt) : "aún no has exportado uno"}.`,
+    `- Sincronización remota: ${auth.user ? (safety.lastRemoteSaveAt ? `última sync completa ${formatDateTime(safety.lastRemoteSaveAt)}` : auth.statusLabel) : "sin sesión remota, trabajando en local"}.`
+  ];
+  return `Estado de tranquilidad:\n${lines.join("\n")}\n\nMi recomendación: ${snapshot ? "antes de un cambio grande, exporta un respaldo además del punto local." : "crea ahora un punto de restauración y exporta un respaldo antes de tocar algo importante."}`;
 }
 
 function buildMeetingAdvice() {
@@ -3476,6 +3909,37 @@ function createTaskFromPrompt(message) {
   };
 }
 
+function convertCommentToTaskFromPrompt(message) {
+  const chapter = findChapterFromPrompt(message);
+  const comment = chapter
+    ? [...state.reviewComments].find((item) => item.chapter === chapter.title && item.status !== "Resuelto")
+    : findUrgentComment();
+
+  if (!comment) {
+    return { reply: "Puedo convertir un comentario en tarea, pero no encuentro ninguno abierto ahora mismo. Si quieres, dime el capítulo o registra primero el comentario." };
+  }
+
+  const due = extractDateFromText(message) || comment.due || "";
+  const task = {
+    id: createId("tk"),
+    title: `Resolver comentario: ${comment.chapter}`,
+    area: "Revisión",
+    status: inferTaskColumn(due),
+    due,
+    effort: comment.priority === "Alta" ? "90 min" : "45 min",
+    impact: comment.priority === "Alta" ? "Alto" : "Medio",
+    done: false,
+    completedAt: ""
+  };
+  state.tasks.unshift(task);
+  if (comment.status === "Pendiente") comment.status = "En proceso";
+
+  return {
+    reply: `He convertido el comentario abierto de ${comment.chapter} en una tarea${due ? ` con fecha ${formatDate(due)}` : ""}. La he dejado en ${task.status === "today" ? "Hoy" : task.status === "week" ? "Esta semana" : "Después"}.`,
+    toastMessage: "Comentario convertido en tarea"
+  };
+}
+
 function createReviewCommentFromPrompt(message) {
   const chapter = findChapterFromPrompt(message);
   const commentText = extractFreeText(message, ["comentario", "registrar comentario", "anade comentario", "agrega comentario"]);
@@ -3531,6 +3995,16 @@ function findUrgentComment() {
   return [...state.reviewComments]
     .filter((comment) => comment.status !== "Resuelto")
     .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+}
+
+function nextOpenTask() {
+  return [...state.tasks]
+    .filter((task) => !task.done)
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+}
+
+function openReviewCount() {
+  return state.reviewComments.filter((comment) => comment.status !== "Resuelto").length;
 }
 
 function recommendNextMove() {
@@ -4282,12 +4756,14 @@ function nextDueLabel() {
 }
 
 async function exportData() {
+  const exportedAt = new Date().toISOString();
   if (API_ENABLED && auth.user) {
     try {
       const response = await fetch("/api/backup", { credentials: "same-origin" });
       if (response.ok) {
-        const blob = await response.blob();
-        downloadBlob("doctoral-os-backup.json", blob);
+        const payload = await response.json();
+        downloadText("doctoral-os-backup.json", JSON.stringify(buildExportPayload(payload, exportedAt), null, 2), "application/json");
+        updateSafetyMeta({ lastExportedAt: exportedAt });
         showToast("Respaldo exportado desde el servidor");
         return;
       }
@@ -4296,7 +4772,8 @@ async function exportData() {
     }
   }
 
-  downloadText("doctoral-os-respaldo.json", JSON.stringify({ state, exportedAt: new Date().toISOString() }, null, 2), "application/json");
+  downloadText("doctoral-os-respaldo.json", JSON.stringify(buildExportPayload({ state }, exportedAt), null, 2), "application/json");
+  updateSafetyMeta({ lastExportedAt: exportedAt });
   showToast("Respaldo exportado");
 }
 
@@ -4308,7 +4785,7 @@ function importData(event) {
     try {
       const imported = JSON.parse(reader.result);
       state = ensureStateShape(deepMerge(structuredClone(defaultState), imported.state || imported));
-      saveState("Datos importados");
+      saveState("Datos importados", { forceSnapshot: true, snapshotReason: "Importación de datos" });
       render();
     } catch (error) {
       showToast("No se pudo importar el archivo");
@@ -4321,6 +4798,23 @@ function importData(event) {
 function downloadText(filename, content, type) {
   const blob = new Blob([content], { type });
   downloadBlob(filename, blob);
+}
+
+function buildExportPayload(basePayload, exportedAt) {
+  const snapshot = latestSnapshotRecord();
+  return {
+    ...basePayload,
+    exportedAt,
+    safety: {
+      ...buildAssistantClientMeta(),
+      latestSnapshotSummary: snapshot ? snapshot.summary : "",
+      restorePoints: loadSnapshots().map((item) => ({
+        createdAt: item.createdAt,
+        reason: item.reason,
+        summary: item.summary
+      }))
+    }
+  };
 }
 
 function downloadBlob(filename, blob) {
