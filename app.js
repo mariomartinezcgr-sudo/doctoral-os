@@ -3041,6 +3041,10 @@ function renderPlanner() {
           <li>Semana: lo importante que sí cabe</li>
           <li>Después: lo que todavía no debe robar foco</li>
         </ul>
+        <div class="summary-actions">
+          <button class="ghost-button" data-action="assistant-suggest" data-message="Créame tres tareas foco para esta semana" type="button"><span data-icon="assistant"></span>Montar semana</button>
+          <button class="ghost-button" data-action="assistant-suggest" data-message="Dame un plan de arranque de 45 minutos para hoy" type="button"><span data-icon="assistant"></span>Arranque rápido</button>
+        </div>
       </article>
     </section>
 
@@ -3089,6 +3093,9 @@ function renderReviews() {
             <p><strong>Decisiones:</strong> ${escapeHtml(latest.decisions)}</p>
             <p><strong>Tareas:</strong> ${escapeHtml(latest.tasks)}</p>
             <div class="generated-box">${escapeHtml(generateMeetingEmail(latest))}</div>
+            <div class="summary-actions">
+              <button class="ghost-button" data-action="assistant-suggest" data-message="${escapeAttribute(`Prepárame la reunión del ${latest.date}${latest.time ? ` a las ${latest.time}` : ""} y guárdala en la app`)}" type="button"><span data-icon="assistant"></span>Preparar agenda</button>
+            </div>
           </article>
         ` : emptyState("Registra tu próxima reunión para convertir acuerdos en tareas.")}
 
@@ -4505,6 +4512,7 @@ function reviewCard(comment, statuses) {
       <p><strong>Respuesta:</strong> ${escapeHtml(comment.response)}</p>
       <div class="row-actions">
         ${nextStatuses.map((status) => `<button class="tiny-button" data-action="comment-status" data-id="${comment.id}" data-value="${escapeAttribute(status)}" type="button">${escapeHtml(status)}</button>`).join("")}
+        <button class="tiny-button" data-action="assistant-suggest" data-message="${escapeAttribute(`Redacta respuesta al comentario de ${comment.chapter}`)}" type="button">Responder</button>
         <button class="tiny-button" data-action="comment-to-task" data-id="${comment.id}" type="button">Crear tarea</button>
       </div>
     </article>
