@@ -1,6 +1,7 @@
 const STORAGE_KEY = "doctoral-os-state-v1";
 const DEMO_STORAGE_KEY = "doctoral-os-demo-state-v1";
 const DEMO_QUERY_PARAM = "demo";
+const NEXT_QUERY_PARAM = "next";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
 const DEFAULT_CHECKLIST_ITEMS = [
   "Objetivo del capítulo explícito",
@@ -647,6 +648,9 @@ function updateAuthUI() {
 function maybeOpenAuthFromUrl() {
   const url = new URL(window.location.href);
   const resetToken = url.searchParams.get("reset");
+  if (auth.user && consumePostLoginRedirect()) {
+    return;
+  }
   if (resetToken && !auth.user) {
     pendingResetToken = resetToken;
     openAuthModal("reset");
@@ -661,6 +665,29 @@ function maybeOpenAuthFromUrl() {
   openAuthModal(intent === "register" ? "register" : "login");
   url.searchParams.delete("auth");
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+}
+
+function nextRedirectPath() {
+  const url = new URL(window.location.href);
+  const value = String(url.searchParams.get(NEXT_QUERY_PARAM) || "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return "";
+  return value;
+}
+
+function consumePostLoginRedirect() {
+  const destination = nextRedirectPath();
+  if (!destination) return false;
+  const current = window.location.pathname + window.location.search + window.location.hash;
+  if (destination === window.location.pathname) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(NEXT_QUERY_PARAM);
+    url.searchParams.delete("auth");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    return false;
+  }
+  if (destination === current) return false;
+  window.location.assign(destination);
+  return true;
 }
 
 function openAuthModal(intent = "login") {
@@ -1270,6 +1297,7 @@ async function handleAuthSubmit(event) {
 
     closeAuthModal();
     form.reset();
+    if (consumePostLoginRedirect()) return;
     showToast(mode === "password-reset-confirm" ? "Contraseña actualizada" : "Cuenta sincronizada");
     render();
     launchOnboardingIfNeeded();
@@ -1977,6 +2005,15 @@ function renderDashboard() {
   const totalWords = state.chapters.reduce((sum, chapter) => sum + Number(chapter.words || 0), 0);
   const targetWords = Number(state.project.writingTarget || 0);
   const nextTask = [...state.tasks].filter((task) => !task.done).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
+  const activeChapter = state.chapters.find((chapter) => chapter.id === state.editorChapterId)
+    || state.chapters.find((chapter) => chapter.status !== "Aprobado")
+    || state.chapters[0];
+  const nextMeeting = [...state.meetings]
+    .filter((meeting) => meeting.date)
+    .sort((a, b) => `${a.date}T${a.time || "99:99"}`.localeCompare(`${b.date}T${b.time || "99:99"}`))[0];
+  const priorityComment = [...state.reviewComments]
+    .filter((comment) => comment.status !== "Resuelto")
+    .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))[0];
   const readingLinked = state.readings.filter((item) => item.chapter && item.chapter !== "Sin capítulo").length;
   const pendingComments = state.reviewComments.filter((item) => item.status !== "Resuelto").length;
   const wordsThisWeek = writingWordsLastDays(7);
@@ -2170,6 +2207,8 @@ function renderDashboard() {
       ${metric("Lecturas", `${readingLinked}/${state.readings.length}`, "vinculadas a capítulos")}
     </section>
 
+    ${demoMode ? "" : renderReentrySection({ hasStarted, nextTask, activeChapter, nextMeeting, priorityComment })}
+
     ${dashboardJourney}
 
     ${renderAnalyticsSection(analytics)}
@@ -2218,6 +2257,102 @@ function renderDashboard() {
           </div>
         `).join("") || emptyState("Sin comentarios todavía. Registra los próximos acuerdos de revisión.")}
       </article>
+    </section>
+  `;
+}
+
+function renderReentrySection({ hasStarted, nextTask, activeChapter, nextMeeting, priorityComment }) {
+  const cards = hasStarted ? [
+    {
+      kicker: "Reentrada rápida",
+      title: nextTask ? escapeHtml(nextTask.title) : "Aterriza una tarea cerrable",
+      body: nextTask
+        ? `Empieza por la tarea más inmediata para no reabrir demasiados frentes a la vez.`
+        : "Si hoy vuelves a la tesis, lo más rentable es dejar una tarea pequeña, clara y con fecha.",
+      meta: [
+        nextTask?.due ? `Vence ${formatDate(nextTask.due)}` : "Sin fecha todavía",
+        nextTask?.impact ? `Impacto ${escapeHtml(nextTask.impact)}` : "Semana sin priorizar"
+      ],
+      view: "planner",
+      label: nextTask ? "Abrir tarea" : "Planificar semana"
+    },
+    {
+      kicker: "Capítulo activo",
+      title: activeChapter ? escapeHtml(activeChapter.title) : "Monta tu estructura base",
+      body: activeChapter
+        ? "Retoma el capítulo que ya tienes abierto y decide si toca escribir, revisar o cerrar checklist."
+        : "Tener un capítulo activo suele ser la forma más simple de recuperar continuidad en la tesis.",
+      meta: [
+        activeChapter ? `${formatNumber(activeChapter.words)} palabras` : "Sin capítulos todavía",
+        activeChapter?.status ? escapeHtml(activeChapter.status) : "Empieza por el esqueleto"
+      ],
+      view: "chapters",
+      label: activeChapter ? "Retomar capítulo" : "Crear capítulos"
+    },
+    {
+      kicker: "Conversación visible",
+      title: priorityComment ? escapeHtml(priorityComment.chapter) : nextMeeting ? escapeHtml(nextMeeting.type || "Próxima reunión") : "Haz visible la conversación académica",
+      body: priorityComment
+        ? "Tienes feedback pendiente: conviene convertirlo pronto en respuesta o tarea concreta."
+        : nextMeeting
+          ? "La siguiente reunión ya tiene contexto: agenda, decisiones y tareas pueden vivir en el mismo sitio."
+          : "Cuando la conversación con dirección entra en el sistema, la tesis suele perder menos continuidad.",
+      meta: [
+        priorityComment?.due ? `Límite ${formatDate(priorityComment.due)}` : nextMeeting?.date ? `Fecha ${formatDate(nextMeeting.date)}` : "Sin revisión registrada",
+        priorityComment ? escapeHtml(priorityComment.status) : nextMeeting?.attendees ? escapeHtml(nextMeeting.attendees) : "Todavía no hay contexto"
+      ],
+      view: "reviews",
+      label: priorityComment ? "Resolver feedback" : nextMeeting ? "Abrir reunión" : "Registrar revisión"
+    }
+  ] : [
+    {
+      kicker: "Primer paso",
+      title: "Define tu capítulo activo",
+      body: "Empieza por una estructura mínima y un solo capítulo con objetivo, fecha y checklist visible.",
+      meta: ["Base doctoral", "Esqueleto inicial"],
+      view: "chapters",
+      label: "Crear estructura"
+    },
+    {
+      kicker: "Segundo paso",
+      title: "Haz tu semana cerrable",
+      body: "Convierte la tesis en una sola tarea concreta con fecha para volver a coger ritmo sin fricción.",
+      meta: ["Semana real", "Prioridad visible"],
+      view: "planner",
+      label: "Planificar semana"
+    },
+    {
+      kicker: "Tercer paso",
+      title: "Registra tu primera conversación",
+      body: "Deja una reunión o comentario dentro del sistema para que el contexto no dependa solo de tu memoria.",
+      meta: ["Revisión", "Contexto compartido"],
+      view: "reviews",
+      label: "Abrir revisión"
+    }
+  ];
+
+  return `
+    <section class="reentry-shell">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Volver al foco</p>
+          <h2>Retoma la tesis sin tener que decidir todo de nuevo</h2>
+          <p>DoctoralOS ya puede sugerirte por dónde seguir: tarea inmediata, capítulo activo y conversación pendiente.</p>
+        </div>
+      </div>
+      <div class="reentry-grid">
+        ${cards.map((card) => `
+          <article class="card reentry-card">
+            <p class="card-kicker">${card.kicker}</p>
+            <h3>${card.title}</h3>
+            <p>${card.body}</p>
+            <div class="reentry-meta">
+              ${card.meta.map((item) => `<span>${item}</span>`).join("")}
+            </div>
+            <button class="ghost-button" data-action="go" data-view="${card.view}" type="button">${card.label}</button>
+          </article>
+        `).join("")}
+      </div>
     </section>
   `;
 }

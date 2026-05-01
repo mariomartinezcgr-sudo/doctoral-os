@@ -462,6 +462,50 @@ h3 {
   margin-bottom: 18px;
 }
 
+.reentry-shell {
+  margin-bottom: 18px;
+}
+
+.reentry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.reentry-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.reentry-card h3 {
+  margin-bottom: 0;
+  font-size: 1.08rem;
+}
+
+.reentry-card p {
+  color: var(--muted);
+}
+
+.reentry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reentry-meta span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid #d8e2e6;
+  border-radius: 999px;
+  background: #f8fbfb;
+  color: #506069;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .metric {
   min-height: 108px;
   padding: 15px;
@@ -1637,6 +1681,7 @@ tr:last-child td {
   .hero-panel,
   .grid-2,
   .grid-3,
+  .reentry-grid,
   .kanban,
   .review-board,
   .onboarding-strip,

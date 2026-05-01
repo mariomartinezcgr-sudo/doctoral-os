@@ -17,6 +17,8 @@ const RESEND_API_URL = "https://api.resend.com/emails";
 const ASSISTANT_THREAD_LIMIT = 16;
 const SESSION_COOKIE = "doctoral_os_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const PRIVATE_PREVIEW_SHORTCUT = "/acceso-privado";
+const PRIVATE_APP_SHORTCUT = "/mi-espacio";
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const rateLimitStore = new Map();
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "mario.martinez.cgr@gmail.com";
@@ -421,6 +423,7 @@ async function handleApi(req, res) {
 function serveStatic(req, res) {
   const requestUrl = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   const { pathname, searchParams } = requestUrl;
+  const hasPrivateSiteAccess = canAccessPrivateSite(req);
   if (!["GET", "HEAD"].includes(req.method)) {
     res.writeHead(405, {
       ...securityHeaders(req),
@@ -428,6 +431,21 @@ function serveStatic(req, res) {
       "Content-Type": "text/plain; charset=utf-8"
     });
     res.end("Method Not Allowed");
+    return;
+  }
+
+  if (pathname === PRIVATE_PREVIEW_SHORTCUT) {
+    redirect(req, res, hasPrivateSiteAccess ? "/preview" : "/app?auth=login&next=%2Fpreview");
+    return;
+  }
+
+  if (pathname === PRIVATE_APP_SHORTCUT) {
+    redirect(req, res, hasPrivateSiteAccess ? "/app" : "/app?auth=login&next=%2Fapp");
+    return;
+  }
+
+  if (PUBLIC_HOLD_PAGE && pathname === "/" && hasPrivateSiteAccess) {
+    redirect(req, res, "/preview");
     return;
   }
 
@@ -458,7 +476,6 @@ function serveStatic(req, res) {
     return;
   }
   const requested = routeMap[pathname] || decodeURIComponent(pathname);
-  const hasPrivateSiteAccess = canAccessPrivateSite(req);
 
   if (PUBLIC_HOLD_PAGE) {
     const protectedMarketingFiles = new Set([
@@ -470,13 +487,14 @@ function serveStatic(req, res) {
       "/security.html"
     ]);
     const wantsPreview = pathname === "/preview";
+    const wantsPrivateApp = (pathname === "/app" || pathname === "/app/") && searchParams.get("demo") !== "1" && !searchParams.get("auth") && !searchParams.get("reset");
     const wantsPublicDemo = (pathname === "/app" || pathname === "/app/") && searchParams.get("demo") === "1";
     const isProtectedMarketingAsset = requested.startsWith("/assets/marketing/");
-    const requiresPrivateAccess = wantsPreview || wantsPublicDemo || protectedMarketingFiles.has(requested) || isProtectedMarketingAsset;
+    const requiresPrivateAccess = wantsPreview || wantsPrivateApp || wantsPublicDemo || protectedMarketingFiles.has(requested) || isProtectedMarketingAsset;
 
     if (requiresPrivateAccess && !hasPrivateSiteAccess) {
       if (wantsPreview) {
-        redirect(req, res, "/app?auth=login");
+        redirect(req, res, "/app?auth=login&next=%2Fpreview");
         return;
       }
       serveFile(req, res, path.join(ROOT, "holding.html"));

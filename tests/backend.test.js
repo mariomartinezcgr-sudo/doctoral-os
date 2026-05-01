@@ -153,11 +153,31 @@ async function main() {
     assert.equal(demoBlocked.status, 200);
     assert.ok(String(demoBlocked.body).includes("Estamos trabajando en ello"));
 
+    const appShellHidden = await request("/app", { method: "GET" });
+    assert.equal(appShellHidden.status, 200);
+    assert.ok(String(appShellHidden.body).includes("Estamos trabajando en ello"));
+
+    const privatePreviewShortcut = await request("/acceso-privado", { method: "GET", redirect: "manual" });
+    assert.equal(privatePreviewShortcut.status, 302);
+    assert.equal(privatePreviewShortcut.location, "/app?auth=login&next=%2Fpreview");
+
+    const privateAppShortcut = await request("/mi-espacio", { method: "GET", redirect: "manual" });
+    assert.equal(privateAppShortcut.status, 302);
+    assert.equal(privateAppShortcut.location, "/app?auth=login&next=%2Fapp");
+
     const ownerRegister = await request("/api/register", {
       method: "POST",
       body: { email: "owner@example.com", password: "password123", name: "Owner" }
     });
     assert.equal(ownerRegister.status, 201);
+
+    const ownerHome = await request("/", {
+      method: "GET",
+      cookie: ownerRegister.cookie,
+      redirect: "manual"
+    });
+    assert.equal(ownerHome.status, 302);
+    assert.equal(ownerHome.location, "/preview");
 
     const ownerPreview = await request("/preview", {
       method: "GET",
@@ -165,6 +185,29 @@ async function main() {
     });
     assert.equal(ownerPreview.status, 200);
     assert.ok(String(ownerPreview.body).includes("El sistema de trabajo para terminar la tesis"));
+
+    const ownerPreviewShortcut = await request("/acceso-privado", {
+      method: "GET",
+      cookie: ownerRegister.cookie,
+      redirect: "manual"
+    });
+    assert.equal(ownerPreviewShortcut.status, 302);
+    assert.equal(ownerPreviewShortcut.location, "/preview");
+
+    const ownerAppShortcut = await request("/mi-espacio", {
+      method: "GET",
+      cookie: ownerRegister.cookie,
+      redirect: "manual"
+    });
+    assert.equal(ownerAppShortcut.status, 302);
+    assert.equal(ownerAppShortcut.location, "/app");
+
+    const ownerApp = await request("/app", {
+      method: "GET",
+      cookie: ownerRegister.cookie
+    });
+    assert.equal(ownerApp.status, 200);
+    assert.ok(String(ownerApp.body).includes("Sistema doctoral"));
   });
 
   console.log("backend tests passed");
@@ -214,7 +257,8 @@ async function request(baseUrl, pathname, options) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: options.method,
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    redirect: options.redirect || "follow"
   });
   const text = await response.text();
   const setCookie = response.headers.get("set-cookie") || "";
@@ -225,6 +269,7 @@ async function request(baseUrl, pathname, options) {
       ? (text ? JSON.parse(text) : {})
       : text,
     setCookie,
+    location: response.headers.get("location") || "",
     cookie: setCookie ? setCookie.split(";")[0] : ""
   };
 }
