@@ -862,6 +862,11 @@ h3 {
   background: #fbfcfc;
 }
 
+.note-card-body {
+  color: #405059;
+  line-height: 1.55;
+}
+
 .chapter-top,
 .task-top,
 .reading-top {
@@ -2217,6 +2222,23 @@ tr:last-child td {
   gap: 14px;
 }
 
+.assistant-action-card {
+  display: grid;
+  gap: 14px;
+}
+
+.assistant-action-list {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-feedback-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .assistant-style-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -2272,6 +2294,19 @@ tr:last-child td {
 
 .assistant-safety-list strong {
   font-size: 0.95rem;
+}
+
+.chapter-copilot-panel .assistant-brief-grid {
+  padding: 0;
+}
+
+.chapter-copilot-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.chapter-copilot-grid .assistant-brief-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
 }
 
 .assistant-safety-list span {

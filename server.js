@@ -11,7 +11,7 @@ const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH |
 const SQLITE_PATH = path.join(DATA_DIR, "doctoralos.sqlite");
 const LEGACY_DB_PATH = path.join(DATA_DIR, "db.json");
 const MAX_BODY = 2 * 1024 * 1024;
-const OPENAI_API_URL = "https://api.openai.com/v1/responses";
+const OPENAI_API_URL = process.env.OPENAI_API_URL || "https://api.openai.com/v1/responses";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const RESEND_API_URL = "https://api.resend.com/emails";
 const ASSISTANT_THREAD_LIMIT = 16;
@@ -372,7 +372,7 @@ async function handleApi(req, res) {
       const result = await runAssistantWithOpenAI(auth.user, assistantState, message, clientMeta);
       const savedAt = saveUserState(auth.user.id, result.state);
       updateUserTimestamp(auth.user.id, savedAt);
-      sendJson(res, 200, { ok: true, reply: result.reply, state: result.state, savedAt, model: result.model, mode: "openai" });
+      sendJson(res, 200, { ok: true, reply: result.reply, state: result.state, savedAt, model: result.model, mode: "openai", pendingAction: result.pendingAction || null });
     } catch (error) {
       console.error("Assistant error", error);
       sendJson(res, 502, { error: "TeDoc con IA no pudo responder ahora mismo." });
@@ -1067,14 +1067,16 @@ function normalizeAssistantState(state) {
 }
 
 async function runAssistantWithOpenAI(user, state, message, clientMeta = {}) {
-  const assistantState = normalizeAssistantState(state);
-  const conversation = buildAssistantConversationInput(assistantState.assistantThread);
+  const baseState = normalizeAssistantState(cloneJson(state));
+  const workingState = normalizeAssistantState(cloneJson(baseState));
+  const pendingActions = [];
+  const conversation = buildAssistantConversationInput(workingState.assistantThread);
   const lastMessage = conversation[conversation.length - 1];
   if (!lastMessage || lastMessage.role !== "user" || String(lastMessage.content || "").trim() !== message) {
     conversation.push({ role: "user", content: message });
   }
   const requestInput = [
-    { role: "developer", content: buildAssistantPrompt(user, assistantState, clientMeta) },
+    { role: "developer", content: buildAssistantPrompt(user, workingState, clientMeta) },
     ...conversation
   ];
 
@@ -1090,15 +1092,23 @@ async function runAssistantWithOpenAI(user, state, message, clientMeta = {}) {
     const calls = extractFunctionCalls(response);
     if (!calls.length) {
       const reply = extractAssistantText(response) || "Puedo ayudarte mejor si me pides una acción concreta o una duda de tesis.";
-      assistantState.assistantThread.push(createAssistantMessage("assistant", reply));
-      assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
-      return { reply, state: assistantState, model: response.model || OPENAI_MODEL };
+      workingState.assistantThread.push(createAssistantMessage("assistant", reply));
+      workingState.assistantThread = trimAssistantThread(workingState.assistantThread);
+      const stateForClient = cloneJson(baseState);
+      stateForClient.assistantThread = workingState.assistantThread;
+      stateForClient.assistantStyleMemory = workingState.assistantStyleMemory;
+      return {
+        reply,
+        state: normalizeAssistantState(stateForClient),
+        model: response.model || OPENAI_MODEL,
+        pendingAction: createAssistantPendingAction(pendingActions)
+      };
     }
 
     const outputs = calls.map((call) => ({
       type: "function_call_output",
       call_id: call.call_id,
-      output: JSON.stringify(executeAssistantTool(assistantState, call))
+      output: JSON.stringify(executeAssistantTool(workingState, call, pendingActions))
     }));
 
     response = await openAIResponsesCreate({
@@ -1109,9 +1119,17 @@ async function runAssistantWithOpenAI(user, state, message, clientMeta = {}) {
   }
 
   const fallbackReply = "He intentado procesarlo, pero necesito que reformules la petición en una sola acción concreta.";
-  assistantState.assistantThread.push(createAssistantMessage("assistant", fallbackReply));
-  assistantState.assistantThread = trimAssistantThread(assistantState.assistantThread);
-  return { reply: fallbackReply, state: assistantState, model: OPENAI_MODEL };
+  workingState.assistantThread.push(createAssistantMessage("assistant", fallbackReply));
+  workingState.assistantThread = trimAssistantThread(workingState.assistantThread);
+  const stateForClient = cloneJson(baseState);
+  stateForClient.assistantThread = workingState.assistantThread;
+  stateForClient.assistantStyleMemory = workingState.assistantStyleMemory;
+  return {
+    reply: fallbackReply,
+    state: normalizeAssistantState(stateForClient),
+    model: OPENAI_MODEL,
+    pendingAction: createAssistantPendingAction(pendingActions)
+  };
 }
 
 async function openAIResponsesCreate(payload) {
@@ -1145,11 +1163,12 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
     "Si el usuario te pide preparar una reunión, guarda una agenda útil dentro de la reunión adecuada.",
     "Si el usuario te pide responder a un comentario, guarda una respuesta de trabajo dentro del comentario correspondiente.",
+    "Si el usuario trabaja un capítulo concreto, puedes detectar la sección más floja, convertir un comentario en checklist de reescritura, proponer estructura de un apartado y preparar la siguiente sesión.",
     "Si el usuario te pide plan semanal, puedes crear hasta tres tareas concretas usando varias llamadas de herramienta.",
     "Si el usuario pide convertir un comentario en tarea, usa la herramienta disponible.",
+    "Si usas herramientas, estás preparando una vista previa para confirmar en cliente. No digas que ya está guardado o aplicado: di que dejas la propuesta lista para confirmar.",
     "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
     "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
-    "Si usas herramientas, guarda primero y después confirma exactamente qué has creado y dónde queda guardado.",
     "Ajusta el tono, el número de frentes, la profundidad del plan y la preparación de reuniones según la memoria de estilo del usuario, salvo que el usuario pida otra cosa en este mensaje.",
     "Si no hace falta herramienta, responde con consejo accionable y concreto.",
     "Usuario actual: " + user.name + " (" + user.email + ")",
@@ -1180,6 +1199,7 @@ function buildAssistantContext(state) {
       writingTarget: Number(state.project && state.project.writingTarget || 0)
     },
     chapters: state.chapters.slice(0, 8).map((chapter) => ({
+      id: chapter.id || "",
       title: chapter.title || "",
       status: chapter.status || "",
       progress: Number(chapter.progress || 0),
@@ -1187,7 +1207,15 @@ function buildAssistantContext(state) {
       words: Number(chapter.words || 0),
       target: Number(chapter.target || 0),
       sections: Array.isArray(chapter.sections) ? chapter.sections.length : 0,
-      checklistOpen: Array.isArray(chapter.checklist) ? chapter.checklist.filter((item) => !item.done).length : 0
+      checklistOpen: Array.isArray(chapter.checklist) ? chapter.checklist.filter((item) => !item.done).length : 0,
+      rewriteChecklistOpen: Array.isArray(chapter.rewriteChecklist) ? chapter.rewriteChecklist.filter((item) => !item.done).length : 0,
+      sectionDetails: Array.isArray(chapter.sections) ? chapter.sections.slice(0, 6).map((section) => ({
+        id: section.id || "",
+        title: section.title || "",
+        status: section.status || "",
+        words: Number(section.words || 0),
+        goal: section.goal || ""
+      })) : []
     })),
     tasks: state.tasks.slice(0, 12).map((task) => ({
       title: task.title || "",
@@ -1205,8 +1233,11 @@ function buildAssistantContext(state) {
       agenda: meeting.agenda || ""
     })),
     reviewComments: state.reviewComments.slice(0, 10).map((comment) => ({
+      id: comment.id || "",
       chapter: comment.chapter || "",
       source: comment.source || "",
+      comment: comment.comment || "",
+      response: comment.response || "",
       status: comment.status || "",
       priority: comment.priority || "",
       due: comment.due || ""
@@ -1216,9 +1247,11 @@ function buildAssistantContext(state) {
       sessionsLast7Days: sessionsLastDays(state.writingLog, 7)
     },
     analytics: buildAssistantAnalytics(state),
+    activeChapterTitle: (Array.isArray(state.chapters) ? state.chapters : []).find((chapter) => chapter.id === state.editorChapterId)?.title || "",
     styleMemory: {
       summary: state.assistantStyleMemory && state.assistantStyleMemory.summary || "",
       explicit: state.assistantStyleMemory && state.assistantStyleMemory.explicit || {},
+      feedback: state.assistantStyleMemory && state.assistantStyleMemory.feedback || {},
       learned: state.assistantStyleMemory && state.assistantStyleMemory.learned || {}
     }
   };
@@ -1405,6 +1438,26 @@ function assistantTools() {
         },
         required: ["chapter", "title", "due", "effort", "impact"]
       }
+    },
+    {
+      type: "function",
+      name: "set_chapter_rewrite_checklist",
+      description: "Guarda un checklist de reescritura dentro de un capítulo existente a partir de comentarios o debilidades detectadas.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          chapter: { type: "string", description: "Título del capítulo donde se guarda el checklist." },
+          sourceComment: { type: "string", description: "Comentario que origina el checklist o cadena vacía." },
+          items: {
+            type: "array",
+            description: "Pasos concretos de reescritura.",
+            items: { type: "string" }
+          }
+        },
+        required: ["chapter", "sourceComment", "items"]
+      }
     }
   ];
 }
@@ -1435,7 +1488,20 @@ function extractAssistantText(response) {
   return chunks.join("\n\n").trim();
 }
 
-function executeAssistantTool(state, call) {
+function createAssistantPendingAction(actions) {
+  if (!Array.isArray(actions) || !actions.length) return null;
+  return {
+    id: createEntityId("ap"),
+    actions
+  };
+}
+
+function pushPendingAssistantAction(pendingActions, action) {
+  if (!action || typeof action !== "object") return;
+  pendingActions.push(action);
+}
+
+function executeAssistantTool(state, call, pendingActions = []) {
   const args = parseJsonObject(call.arguments);
 
   if (call.name === "create_task") {
@@ -1454,6 +1520,7 @@ function executeAssistantTool(state, call) {
       impact: ["Bajo", "Medio", "Alto"].includes(args.impact) ? args.impact : "Medio"
     };
     state.tasks.unshift(task);
+    pushPendingAssistantAction(pendingActions, { type: "create_task", task });
     return { ok: true, task };
   }
 
@@ -1475,6 +1542,7 @@ function executeAssistantTool(state, call) {
       next: ""
     };
     state.meetings.unshift(meeting);
+    pushPendingAssistantAction(pendingActions, { type: "create_meeting", meeting });
     return { ok: true, meeting };
   }
 
@@ -1492,6 +1560,7 @@ function executeAssistantTool(state, call) {
     };
     if (!reviewComment.comment) return { ok: false, error: "El comentario necesita texto." };
     state.reviewComments.unshift(reviewComment);
+    pushPendingAssistantAction(pendingActions, { type: "create_review_comment", reviewComment });
     return { ok: true, reviewComment };
   }
 
@@ -1510,6 +1579,7 @@ function executeAssistantTool(state, call) {
     chapter.notes = Array.isArray(chapter.notes) ? chapter.notes : [];
     chapter.notes.unshift(note);
     chapter.editorUpdatedAt = new Date().toISOString();
+    pushPendingAssistantAction(pendingActions, { type: "create_chapter_note", chapterId: chapter.id || "", chapterTitle: chapter.title || "", note });
     return { ok: true, note, chapter: chapter.title };
   }
 
@@ -1525,6 +1595,16 @@ function executeAssistantTool(state, call) {
     meeting.agenda = agenda;
     meeting.tasks = tasks;
     meeting.next = normalizeIsoDate(args.next) || "";
+    pushPendingAssistantAction(pendingActions, {
+      type: "update_meeting_brief",
+      meetingId: meeting.id || "",
+      meetingLabel: [meeting.date, meeting.time, meeting.type].filter(Boolean).join(" · "),
+      date: meeting.date || "",
+      time: meeting.time || "",
+      agenda: meeting.agenda || "",
+      tasks: meeting.tasks || "",
+      next: meeting.next || ""
+    });
     return {
       ok: true,
       meeting: {
@@ -1545,6 +1625,13 @@ function executeAssistantTool(state, call) {
     if (!response) return { ok: false, error: "La respuesta del comentario no puede quedar vacía." };
     comment.response = response;
     comment.status = String(args.status || comment.status || "En proceso").trim() || "En proceso";
+    pushPendingAssistantAction(pendingActions, {
+      type: "update_review_comment_response",
+      commentId: comment.id || "",
+      chapterTitle: comment.chapter || "",
+      response: comment.response || "",
+      status: comment.status || "En proceso"
+    });
     return {
       ok: true,
       reviewComment: {
@@ -1575,7 +1662,40 @@ function executeAssistantTool(state, call) {
     };
     state.tasks.unshift(task);
     if (normalizeReviewStatusName(comment.status) === "Pendientes") comment.status = "En proceso";
+    pushPendingAssistantAction(pendingActions, {
+      type: "convert_review_comment_to_task",
+      commentId: comment.id || "",
+      chapterTitle: comment.chapter || "",
+      status: comment.status || "En proceso",
+      task
+    });
     return { ok: true, task, comment: { chapter: comment.chapter, due: comment.due || "" } };
+  }
+
+  if (call.name === "set_chapter_rewrite_checklist") {
+    const chapter = findChapterByTitle(state.chapters, args.chapter);
+    if (!chapter) return { ok: false, error: "No he encontrado ese capítulo para guardar el checklist." };
+    const items = Array.isArray(args.items)
+      ? args.items.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    if (!items.length) return { ok: false, error: "El checklist necesita al menos un paso concreto." };
+    const sourceComment = String(args.sourceComment || "").trim();
+    chapter.rewriteChecklist = items.map((label) => ({
+      id: createEntityId("rw"),
+      label,
+      done: false,
+      sourceCommentId: "",
+      sourceCommentText: sourceComment
+    }));
+    chapter.editorUpdatedAt = new Date().toISOString();
+    pushPendingAssistantAction(pendingActions, {
+      type: "set_chapter_rewrite_checklist",
+      chapterId: chapter.id || "",
+      chapterTitle: chapter.title || "",
+      sourceCommentText: sourceComment,
+      items: chapter.rewriteChecklist
+    });
+    return { ok: true, chapter: chapter.title || "", items: chapter.rewriteChecklist };
   }
 
   return { ok: false, error: "Herramienta desconocida: " + call.name };

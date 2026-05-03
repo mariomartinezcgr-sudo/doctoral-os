@@ -109,6 +109,8 @@ let auth = {
 };
 let syncTimer = null;
 let assistantBusy = false;
+let assistantPendingAction = null;
+let assistantUndoState = null;
 
 const screen = document.querySelector("#screen");
 const viewTitle = document.querySelector("#viewTitle");
@@ -256,6 +258,14 @@ function createInitialAssistantStyleMemory() {
       workBlock: "auto",
       meetingMode: "auto"
     },
+    feedback: {
+      helpful: 0,
+      moreDirect: 0,
+      moreDetail: 0,
+      tooLong: 0,
+      lastType: "",
+      lastAt: ""
+    },
     learned: {
       recommendationTone: "direct",
       focusStyle: "single",
@@ -279,6 +289,14 @@ function normalizeAssistantStyleMemory(memory) {
   merged.explicit.focusMode = ["auto", "single", "balanced"].includes(merged.explicit.focusMode) ? merged.explicit.focusMode : "auto";
   merged.explicit.workBlock = ["auto", "short", "deep"].includes(merged.explicit.workBlock) ? merged.explicit.workBlock : "auto";
   merged.explicit.meetingMode = ["auto", "brief", "structured"].includes(merged.explicit.meetingMode) ? merged.explicit.meetingMode : "auto";
+  merged.feedback = {
+    helpful: Math.max(0, Number(merged.feedback?.helpful || 0)),
+    moreDirect: Math.max(0, Number(merged.feedback?.moreDirect || 0)),
+    moreDetail: Math.max(0, Number(merged.feedback?.moreDetail || 0)),
+    tooLong: Math.max(0, Number(merged.feedback?.tooLong || 0)),
+    lastType: String(merged.feedback?.lastType || ""),
+    lastAt: String(merged.feedback?.lastAt || "")
+  };
   merged.summary = String(merged.summary || "");
   merged.updatedAt = String(merged.updatedAt || "");
   return merged;
@@ -370,9 +388,14 @@ function buildAssistantStyleSummary(memory) {
 
 function resolveAssistantStyle(memory = state.assistantStyleMemory) {
   const normalized = normalizeAssistantStyleMemory(memory);
+  const directFeedbackBias = Number(normalized.feedback.moreDirect || 0) + Number(normalized.feedback.tooLong || 0);
+  const detailFeedbackBias = Number(normalized.feedback.moreDetail || 0);
+  const learnedPlanningDepth = normalized.learned.recommendationTone === "detailed" ? "detailed" : "direct";
   const planningDepth = normalized.explicit.planningDepth !== "auto"
     ? normalized.explicit.planningDepth
-    : normalized.learned.recommendationTone === "detailed" ? "detailed" : "direct";
+    : directFeedbackBias === detailFeedbackBias
+      ? learnedPlanningDepth
+      : directFeedbackBias > detailFeedbackBias ? "direct" : "detailed";
   const focusMode = normalized.explicit.focusMode !== "auto"
     ? normalized.explicit.focusMode
     : normalized.learned.focusStyle === "balanced" ? "balanced" : "single";
@@ -792,6 +815,7 @@ function normalizeChapter(chapter) {
   chapter.sections = Array.isArray(chapter.sections) && chapter.sections.length
     ? chapter.sections.map((section) => ({
         ...section,
+        id: section.id || createId("sec"),
         title: section.title || "Sección sin título",
         goal: section.goal || "",
         status: section.status === "En revision" ? "En revisión" : (section.status || "Borrador"),
@@ -800,6 +824,15 @@ function normalizeChapter(chapter) {
       }))
     : [createSectionFromChapter(chapter)];
   chapter.notes = Array.isArray(chapter.notes) ? chapter.notes : [];
+  chapter.rewriteChecklist = Array.isArray(chapter.rewriteChecklist)
+    ? chapter.rewriteChecklist.map((item) => ({
+        id: item.id || createId("rw"),
+        label: String(item.label || "Paso pendiente"),
+        done: Boolean(item.done),
+        sourceCommentId: String(item.sourceCommentId || ""),
+        sourceCommentText: String(item.sourceCommentText || "")
+      }))
+    : [];
   chapter.checklist = Array.isArray(chapter.checklist) && chapter.checklist.length
     ? chapter.checklist
     : createDefaultChecklist(chapter.progress);
@@ -1864,6 +1897,7 @@ function handleScreenClick(event) {
 
   if (action === "assistant-clear") {
     state.assistantThread = createInitialAssistantThread();
+    assistantPendingAction = null;
     saveState("Conversación reiniciada");
     render();
     return;
@@ -1886,6 +1920,28 @@ function handleScreenClick(event) {
 
   if (action === "assistant-export") {
     exportData();
+    return;
+  }
+
+  if (action === "assistant-confirm-action") {
+    confirmAssistantPendingAction();
+    return;
+  }
+
+  if (action === "assistant-cancel-action") {
+    assistantPendingAction = null;
+    showToast("Vista previa cancelada");
+    render();
+    return;
+  }
+
+  if (action === "assistant-undo-action") {
+    undoAssistantLastAction();
+    return;
+  }
+
+  if (action === "assistant-feedback") {
+    applyAssistantFeedback(target.dataset.id, target.dataset.feedback);
     return;
   }
 
@@ -1915,6 +1971,17 @@ function handleScreenClick(event) {
     state = loadState();
     safety = loadSafetyMeta();
     saveState("Demo cerrada", { skipSync: true });
+    render();
+    return;
+  }
+
+  if (action === "toggle-rewrite-check") {
+    const chapter = state.chapters.find((item) => item.id === target.dataset.chapterId);
+    const item = chapter?.rewriteChecklist?.find((entry) => entry.id === id);
+    if (!chapter || !item) return;
+    item.done = !item.done;
+    chapter.editorUpdatedAt = new Date().toISOString();
+    saveState("Checklist de reescritura actualizada");
     render();
     return;
   }
@@ -2810,6 +2877,8 @@ function renderChapters() {
             </div>
           </section>
 
+          ${renderChapterCopilotPanel(activeChapter)}
+
           <section class="editor-section-block">
             <div class="section-header">
               <div>
@@ -2855,6 +2924,8 @@ function renderChapters() {
             </div>
           </section>
 
+          ${renderChapterRewriteChecklist(activeChapter)}
+
           <div class="chapter-controls editor-actions">
             <button class="button" type="submit"><span data-icon="save"></span>Guardar capítulo</button>
             <button class="ghost-button" data-action="chapter-status" data-id="${activeChapter.id}" data-value="En revisión" type="button">Enviar a revisión</button>
@@ -2880,7 +2951,7 @@ function renderChapters() {
                   </div>
                   <button class="tiny-button" data-action="delete-note" data-chapter-id="${activeChapter.id}" data-id="${note.id}" type="button"><span data-icon="trash"></span></button>
                 </div>
-                <p>${escapeHtml(note.text)}</p>
+                <div class="note-card-body">${escapeMultiline(note.text)}</div>
               </article>
             `).join("") || emptyState("Sin notas todavía.")}
           </div>
@@ -2928,6 +2999,90 @@ function newChapterPanel() {
         <button class="button" type="submit"><span data-icon="plus"></span>Añadir capítulo</button>
       </form>
     </div>
+  `;
+}
+
+function renderChapterCopilotPanel(chapter) {
+  const weakestSection = findWeakestSection(chapter);
+  const openComment = findOpenCommentForChapter(chapter.title);
+  const weaknessReason = weakestSection
+    ? buildWeakestSectionExplanation(chapter, weakestSection)
+    : "Todavía no hay secciones suficientes para detectar una parte más débil.";
+  const rewriteOpen = (chapter.rewriteChecklist || []).filter((item) => !item.done).length;
+  const chapterTitle = escapeAttribute(chapter.title);
+
+  return `
+    <section class="editor-section-block chapter-copilot-panel">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Modo capítulo</p>
+          <h2>Dónde intervenir ahora</h2>
+          <p>TeDoc puede leer el capítulo activo, detectar la sección más floja y preparar una intervención concreta antes de tocar el texto.</p>
+        </div>
+      </div>
+
+      <div class="assistant-brief-grid chapter-copilot-grid">
+        <article class="assistant-brief-card">
+          <p class="card-kicker">Sección más floja</p>
+          <h3>${escapeHtml(weakestSection ? weakestSection.title : "Pendiente de detectar")}</h3>
+          <p>${escapeHtml(weaknessReason)}</p>
+          <div class="assistant-brief-meta">
+            <span>${weakestSection ? weakestSection.status : "Sin secciones"}</span>
+            <span>${weakestSection ? `${formatNumber(weakestSection.words)} palabras` : "0 palabras"}</span>
+          </div>
+          <button class="ghost-button" data-action="assistant-suggest" data-message="Detecta la sección más floja del capítulo ${chapterTitle} y dime por qué" type="button">Analizar capítulo</button>
+        </article>
+
+        <article class="assistant-brief-card">
+          <p class="card-kicker">Comentario vivo</p>
+          <h3>${escapeHtml(openComment ? openComment.source : "Sin comentario abierto")}</h3>
+          <p>${escapeHtml(openComment ? openComment.comment : "Cuando haya feedback activo, TeDoc puede convertirlo en checklist de reescritura y dejar visible por dónde entrar.")}</p>
+          <div class="assistant-brief-meta">
+            <span>${escapeHtml(openComment ? openComment.priority : "Sin prioridad")}</span>
+            <span>${escapeHtml(rewriteOpen ? `${rewriteOpen} pasos abiertos` : "Checklist vacía")}</span>
+          </div>
+          <button class="ghost-button" data-action="assistant-suggest" data-message="Convierte el comentario más urgente del capítulo ${chapterTitle} en checklist de reescritura" type="button" ${openComment ? "" : "disabled"}>Pasar a checklist</button>
+        </article>
+
+        <article class="assistant-brief-card">
+          <p class="card-kicker">Próxima sesión</p>
+          <h3>${escapeHtml(chapter.status)}</h3>
+          <p>${escapeHtml(`TeDoc puede proponerte la estructura de un apartado y dejar preparada la siguiente sesión para ${chapter.title} sin abrir más frentes de la cuenta.`)}</p>
+          <div class="assistant-brief-meta">
+            <span>${chapter.due ? `Entrega ${formatDate(chapter.due)}` : "Sin entrega cerrada"}</span>
+            <span>${chapter.tasks?.length ? `${chapter.tasks.length} tareas internas` : "Sin tareas internas"}</span>
+          </div>
+          <div class="summary-actions">
+            <button class="ghost-button" data-action="assistant-suggest" data-message="Propón una estructura para un apartado del capítulo ${chapterTitle}" type="button">Proponer estructura</button>
+            <button class="ghost-button" data-action="assistant-suggest" data-message="Prepárame la siguiente sesión del capítulo ${chapterTitle}" type="button">Preparar sesión</button>
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function renderChapterRewriteChecklist(chapter) {
+  const items = Array.isArray(chapter.rewriteChecklist) ? chapter.rewriteChecklist : [];
+  const pending = items.filter((item) => !item.done).length;
+  return `
+    <section class="editor-section-block">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Reescritura guiada</p>
+          <h2>Checklist de reescritura</h2>
+          <p>${escapeHtml(items.length ? `Tienes ${pending} paso${pending === 1 ? "" : "s"} abiertos para este capítulo.` : "Todavía no hay checklist creada. Puedes generarla desde un comentario abierto del capítulo.")}</p>
+        </div>
+      </div>
+      <div class="checklist-grid">
+        ${items.length ? items.map((item) => `
+          <label class="check-item">
+            <input data-action="toggle-rewrite-check" data-chapter-id="${chapter.id}" data-id="${item.id}" type="checkbox" ${item.done ? "checked" : ""}>
+            <span>${escapeHtml(item.label)}</span>
+          </label>
+        `).join("") : emptyState("Aún no hay pasos de reescritura para este capítulo.")}
+      </div>
+    </section>
   `;
 }
 
@@ -3547,6 +3702,8 @@ function renderAssistant() {
           </div>
         </div>
 
+        ${renderAssistantActionCard()}
+
         ${renderAssistantStyleCard()}
 
         ${renderAssistantSafetyCard()}
@@ -3581,7 +3738,24 @@ function renderAssistantMessage(message) {
         <span>${formatDateTime(message.createdAt)}</span>
       </div>
       <div class="assistant-message-body">${escapeMultiline(message.text)}</div>
+      ${isUser ? "" : renderAssistantFeedbackRow(message)}
     </article>`;
+}
+
+function renderAssistantFeedbackRow(message) {
+  const current = String(message.feedback || "");
+  return `
+    <div class="assistant-feedback-row">
+      ${assistantFeedbackButton(message.id, "helpful", "Esto sí me sirve", current)}
+      ${assistantFeedbackButton(message.id, "too-long", "Demasiado largo", current)}
+      ${assistantFeedbackButton(message.id, "more-direct", "Quiero más directo", current)}
+      ${assistantFeedbackButton(message.id, "more-detail", "Quiero más detalle", current)}
+    </div>
+  `;
+}
+
+function assistantFeedbackButton(messageId, feedback, label, current) {
+  return `<button class="tiny-button ${current === feedback ? "is-active" : ""}" data-action="assistant-feedback" data-id="${messageId}" data-feedback="${feedback}" type="button">${label}</button>`;
 }
 
 function renderAssistantBriefing() {
@@ -3676,6 +3850,39 @@ function renderAssistantSafetyCard() {
   `;
 }
 
+function renderAssistantActionCard() {
+  const pending = normalizeAssistantPendingAction(assistantPendingAction);
+  if (pending) {
+    return `
+      <article class="card assistant-action-card">
+        <p class="card-kicker">Vista previa</p>
+        <h2>${escapeHtml(pending.summary)}</h2>
+        <p class="muted">TeDoc no tocará la app hasta que confirmes. Puedes revisar el impacto exacto y deshacer la última acción después.</p>
+        <ul class="quality-list compact-list assistant-action-list">
+          ${pending.actions.map((action) => `<li>${escapeHtml(describeAssistantAction(action))}</li>`).join("")}
+        </ul>
+        <div class="summary-actions">
+          <button class="button" data-action="assistant-confirm-action" type="button"><span data-icon="check"></span>Confirmar</button>
+          <button class="ghost-button" data-action="assistant-cancel-action" type="button">Cancelar</button>
+          <button class="ghost-button" data-action="assistant-undo-action" type="button" ${assistantUndoState ? "" : "disabled"}>Deshacer última</button>
+        </div>
+      </article>
+    `;
+  }
+
+  if (!assistantUndoState) return "";
+  return `
+    <article class="card assistant-action-card">
+      <p class="card-kicker">Última acción aplicada</p>
+      <h2>${escapeHtml(assistantUndoState.summary || "Acción reciente de TeDoc")}</h2>
+      <p class="muted">Si no te convence lo último que aplicaste, puedes volver exactamente al estado anterior.</p>
+      <div class="summary-actions">
+        <button class="ghost-button" data-action="assistant-undo-action" type="button">Deshacer última</button>
+      </div>
+    </article>
+  `;
+}
+
 function renderAssistantStyleCard() {
   const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   return `
@@ -3744,6 +3951,270 @@ function updateAssistantStylePreference(key, value) {
   state.assistantStyleMemory.explicit[key] = value;
   refreshAssistantStyleMemory(state);
   saveState("Preferencia de estilo guardada");
+  render();
+}
+
+function normalizeAssistantPendingAction(plan) {
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.actions) || !plan.actions.length) return null;
+  return {
+    id: String(plan.id || createId("ap")),
+    actions: plan.actions.filter(Boolean),
+    summary: String(plan.summary || buildAssistantActionSummary(plan.actions)),
+    toastMessage: String(plan.toastMessage || "Cambios aplicados desde TeDoc"),
+    createdAt: String(plan.createdAt || new Date().toISOString())
+  };
+}
+
+function createAssistantActionPlan(actions, options = {}) {
+  const normalized = normalizeAssistantPendingAction({
+    id: options.id,
+    actions,
+    summary: options.summary,
+    toastMessage: options.toastMessage,
+    createdAt: options.createdAt
+  });
+  return normalized;
+}
+
+function buildAssistantActionSummary(actions) {
+  const counts = new Map();
+  (Array.isArray(actions) ? actions : []).forEach((action) => {
+    counts.set(action.type, (counts.get(action.type) || 0) + 1);
+  });
+  const pieces = [];
+  if (counts.get("create_task")) pieces.push(`crear ${counts.get("create_task")} tarea${counts.get("create_task") === 1 ? "" : "s"}`);
+  if (counts.get("create_meeting")) pieces.push(`agendar ${counts.get("create_meeting")} reunión${counts.get("create_meeting") === 1 ? "" : "es"}`);
+  if (counts.get("update_meeting_brief")) pieces.push(`preparar ${counts.get("update_meeting_brief")} agenda${counts.get("update_meeting_brief") === 1 ? "" : "s"} de reunión`);
+  if (counts.get("update_review_comment_response")) pieces.push(`actualizar ${counts.get("update_review_comment_response")} comentario${counts.get("update_review_comment_response") === 1 ? "" : "s"}`);
+  if (counts.get("convert_review_comment_to_task")) pieces.push(`convertir ${counts.get("convert_review_comment_to_task")} comentario${counts.get("convert_review_comment_to_task") === 1 ? "" : "s"} en tarea`);
+  if (counts.get("create_review_comment")) pieces.push(`registrar ${counts.get("create_review_comment")} comentario${counts.get("create_review_comment") === 1 ? "" : "s"}`);
+  if (counts.get("create_chapter_note")) pieces.push(`guardar ${counts.get("create_chapter_note")} nota${counts.get("create_chapter_note") === 1 ? "" : "s"} de capítulo`);
+  if (counts.get("set_chapter_rewrite_checklist")) pieces.push(`crear ${counts.get("set_chapter_rewrite_checklist")} checklist${counts.get("set_chapter_rewrite_checklist") === 1 ? "" : "s"} de reescritura`);
+  if (!pieces.length) return "TeDoc ha preparado una acción";
+  return `Voy a ${joinSentenceParts(pieces)}.`;
+}
+
+function joinSentenceParts(parts) {
+  const items = (Array.isArray(parts) ? parts : []).filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} y ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}`;
+}
+
+function describeAssistantAction(action) {
+  if (!action || typeof action !== "object") return "Acción propuesta";
+  if (action.type === "create_task") {
+    return `Crear tarea "${action.task?.title || "Sin título"}"${action.task?.due ? ` para el ${formatDate(action.task.due)}` : ""}.`;
+  }
+  if (action.type === "create_meeting") {
+    return `Agendar reunión ${action.meeting?.type || "de seguimiento"} el ${formatDate(action.meeting?.date || "")}${action.meeting?.time ? ` a las ${action.meeting.time}` : ""}.`;
+  }
+  if (action.type === "update_meeting_brief") {
+    return `Actualizar la agenda de ${action.meetingLabel || "la reunión"} con próximos puntos y tareas.`;
+  }
+  if (action.type === "update_review_comment_response") {
+    return `Guardar respuesta de trabajo para el comentario de ${action.chapterTitle || "un capítulo"}.`;
+  }
+  if (action.type === "convert_review_comment_to_task") {
+    return `Convertir el comentario de ${action.chapterTitle || "un capítulo"} en la tarea "${action.task?.title || "Resolver comentario"}".`;
+  }
+  if (action.type === "create_review_comment") {
+    return `Registrar comentario en ${action.reviewComment?.chapter || "Sin capítulo"}.`;
+  }
+  if (action.type === "create_chapter_note") {
+    return `Guardar una nota en ${action.chapterTitle || "el capítulo"}: "${action.note?.title || "Nota"}".`;
+  }
+  if (action.type === "set_chapter_rewrite_checklist") {
+    return `Crear checklist de reescritura en ${action.chapterTitle || "el capítulo"} con ${action.items?.length || 0} paso${(action.items?.length || 0) === 1 ? "" : "s"}.`;
+  }
+  return "Acción propuesta";
+}
+
+function confirmAssistantPendingAction() {
+  const plan = normalizeAssistantPendingAction(assistantPendingAction);
+  if (!plan) return;
+  assistantUndoState = {
+    snapshot: JSON.parse(JSON.stringify(state)),
+    summary: plan.summary,
+    createdAt: new Date().toISOString()
+  };
+  plan.actions.forEach((action) => applyAssistantAction(action));
+  assistantPendingAction = null;
+  refreshAssistantStyleMemory(state);
+  saveState(plan.toastMessage, {
+    forceSnapshot: true,
+    snapshotReason: plan.summary
+  });
+  render();
+}
+
+function undoAssistantLastAction() {
+  if (!assistantUndoState?.snapshot) {
+    showToast("No hay una acción reciente para deshacer");
+    return;
+  }
+  const summary = assistantUndoState.summary;
+  state = ensureStateShape(deepMerge(structuredClone(defaultState), assistantUndoState.snapshot || {}));
+  assistantUndoState = null;
+  assistantPendingAction = null;
+  updateSafetyMeta({ lastRestoredAt: new Date().toISOString() });
+  saveState("Última acción deshecha", {
+    forceSnapshot: true,
+    snapshotReason: `Deshacer TeDoc: ${summary || "acción reciente"}`
+  });
+  render();
+}
+
+function applyAssistantAction(action) {
+  if (!action || typeof action !== "object") return;
+
+  if (action.type === "create_task") {
+    const task = action.task && typeof action.task === "object" ? action.task : null;
+    if (!task || state.tasks.some((item) => item.id === task.id)) return;
+    state.tasks.unshift({
+      id: task.id || createId("tk"),
+      title: task.title || "Tarea",
+      area: task.area || "General",
+      status: task.status || inferTaskColumn(task.due || ""),
+      due: task.due || "",
+      effort: task.effort || "45 min",
+      impact: task.impact || "Medio",
+      done: false,
+      completedAt: ""
+    });
+    return;
+  }
+
+  if (action.type === "create_meeting") {
+    const meeting = action.meeting && typeof action.meeting === "object" ? action.meeting : null;
+    if (!meeting || state.meetings.some((item) => item.id === meeting.id)) return;
+    state.meetings.unshift({
+      id: meeting.id || createId("mt"),
+      date: meeting.date || "",
+      time: meeting.time || "",
+      type: meeting.type || "Dirección",
+      attendees: meeting.attendees || "",
+      agenda: meeting.agenda || "",
+      decisions: meeting.decisions || "",
+      tasks: meeting.tasks || "",
+      next: meeting.next || ""
+    });
+    return;
+  }
+
+  if (action.type === "update_meeting_brief") {
+    const meeting = findMeetingByAction(action);
+    if (!meeting) return;
+    meeting.agenda = action.agenda || meeting.agenda || "";
+    meeting.tasks = action.tasks || meeting.tasks || "";
+    meeting.next = action.next || meeting.next || "";
+    return;
+  }
+
+  if (action.type === "update_review_comment_response") {
+    const comment = findReviewCommentByAction(action);
+    if (!comment) return;
+    comment.response = action.response || comment.response || "";
+    comment.status = action.status || comment.status || "En proceso";
+    return;
+  }
+
+  if (action.type === "convert_review_comment_to_task") {
+    applyAssistantAction({ type: "create_task", task: action.task });
+    const comment = findReviewCommentByAction(action);
+    if (comment) comment.status = action.status || comment.status || "En proceso";
+    return;
+  }
+
+  if (action.type === "create_review_comment") {
+    const comment = action.reviewComment && typeof action.reviewComment === "object" ? action.reviewComment : null;
+    if (!comment || state.reviewComments.some((item) => item.id === comment.id)) return;
+    state.reviewComments.unshift({
+      id: comment.id || createId("rv"),
+      chapter: comment.chapter || "Sin capítulo",
+      source: comment.source || "Dirección",
+      comment: comment.comment || "",
+      response: comment.response || "Definir respuesta y criterio de cierre.",
+      status: comment.status || "Pendiente",
+      priority: comment.priority || "Media",
+      due: comment.due || ""
+    });
+    return;
+  }
+
+  if (action.type === "create_chapter_note") {
+    const chapter = findChapterByAction(action);
+    const note = action.note && typeof action.note === "object" ? action.note : null;
+    if (!chapter || !note || chapter.notes.some((item) => item.id === note.id)) return;
+    chapter.notes.unshift({
+      id: note.id || createId("nt"),
+      title: note.title || "Nota",
+      type: note.type || "Idea",
+      date: note.date || todayISO(),
+      text: note.text || ""
+    });
+    chapter.editorUpdatedAt = new Date().toISOString();
+    return;
+  }
+
+  if (action.type === "set_chapter_rewrite_checklist") {
+    const chapter = findChapterByAction(action);
+    if (!chapter) return;
+    chapter.rewriteChecklist = (Array.isArray(action.items) ? action.items : []).map((item) => ({
+      id: item.id || createId("rw"),
+      label: String(item.label || "Paso pendiente"),
+      done: Boolean(item.done),
+      sourceCommentId: String(item.sourceCommentId || action.sourceCommentId || ""),
+      sourceCommentText: String(item.sourceCommentText || action.sourceCommentText || "")
+    }));
+    chapter.editorUpdatedAt = new Date().toISOString();
+  }
+}
+
+function findChapterByAction(action) {
+  return state.chapters.find((chapter) => chapter.id === action.chapterId)
+    || state.chapters.find((chapter) => chapter.title === action.chapterTitle)
+    || null;
+}
+
+function findMeetingByAction(action) {
+  return state.meetings.find((meeting) => meeting.id === action.meetingId)
+    || state.meetings.find((meeting) => meeting.date === action.date && (!action.time || meeting.time === action.time))
+    || null;
+}
+
+function findReviewCommentByAction(action) {
+  return state.reviewComments.find((comment) => comment.id === action.commentId)
+    || state.reviewComments.find((comment) => comment.chapter === action.chapterTitle && comment.status !== "Resuelto")
+    || null;
+}
+
+function applyAssistantFeedback(messageId, feedbackType) {
+  const message = state.assistantThread.find((item) => item.id === messageId && item.role === "assistant");
+  if (!message) return;
+
+  const counters = {
+    helpful: "helpful",
+    "too-long": "tooLong",
+    "more-direct": "moreDirect",
+    "more-detail": "moreDetail"
+  };
+  const counterKey = counters[feedbackType];
+  if (!counterKey) return;
+
+  state.assistantStyleMemory = normalizeAssistantStyleMemory(state.assistantStyleMemory);
+  const feedback = state.assistantStyleMemory.feedback;
+  if (message.feedback && counters[message.feedback]) {
+    const previousKey = counters[message.feedback];
+    feedback[previousKey] = Math.max(0, Number(feedback[previousKey] || 0) - 1);
+  }
+  feedback[counterKey] = Number(feedback[counterKey] || 0) + 1;
+  feedback.lastType = feedbackType;
+  feedback.lastAt = new Date().toISOString();
+  message.feedback = feedbackType;
+  refreshAssistantStyleMemory(state);
+  saveState("TeDoc ha ajustado tu preferencia de respuesta");
   render();
 }
 
@@ -3821,16 +4292,25 @@ Prueba algo como:
   return [createAssistantEntry("assistant", intro)];
 }
 
-function createAssistantEntry(role, text) {
+function createAssistantEntry(role, text, extra = {}) {
   return {
     id: createId("msg"),
     role,
     text,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...extra
   };
 }
 
 function assistantSuggestions() {
+  const activeChapter = state.chapters.find((chapter) => chapter.id === state.editorChapterId) || state.chapters[0];
+  const chapterSuggestions = activeChapter
+    ? [
+        `Detecta la sección más floja del capítulo ${activeChapter.title}`,
+        `Convierte el comentario más urgente del capítulo ${activeChapter.title} en checklist de reescritura`,
+        `Prepárame la siguiente sesión del capítulo ${activeChapter.title}`
+      ]
+    : [];
   return [
     "Qué debería priorizar esta semana",
     "Resúmeme el progreso actual",
@@ -3840,6 +4320,7 @@ function assistantSuggestions() {
     "Convierte mis comentarios pendientes en foco de esta semana",
     "Prepárame la próxima reunión y guárdala en la app",
     "Redacta respuesta al comentario más urgente",
+    ...chapterSuggestions,
     "Cómo de seguro está mi trabajo ahora mismo",
     "Analiza mi ritmo de escritura de las últimas semanas",
     "Dónde está mi cuello de botella ahora mismo",
@@ -3855,6 +4336,10 @@ async function submitAssistantPrompt(message) {
     showToast("Escribe una pregunta o una acción");
     return;
   }
+  if (assistantPendingAction?.actions?.length) {
+    showToast("Confirma o cancela la vista previa antes de pedir otra acción");
+    return;
+  }
   if (assistantBusy) {
     showToast("TeDoc sigue respondiendo");
     return;
@@ -3867,14 +4352,17 @@ async function submitAssistantPrompt(message) {
 
   try {
     const result = await requestAssistantReply(text);
+    assistantPendingAction = normalizeAssistantPendingAction(result.pendingAction);
     state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state));
     saveState("", { skipSync: true });
-    showToast(result.model ? "TeDoc con IA actualizado" : "TeDoc actualizado");
+    showToast(assistantPendingAction ? "Vista previa lista" : (result.model ? "TeDoc con IA actualizado" : "TeDoc actualizado"));
   } catch (error) {
     const result = buildAssistantReply(text);
+    assistantPendingAction = normalizeAssistantPendingAction(result.pendingAction);
     state.assistantThread.push(createAssistantEntry("assistant", result.reply));
     pruneAssistantThread();
-    saveState(result.toastMessage || "Respuesta local guardada");
+    saveState("");
+    showToast(assistantPendingAction ? "Vista previa lista" : "Respuesta local guardada");
     if (assistantCanUseRemote()) {
       console.warn("TeDoc con IA no disponible, usando modo local", error);
     }
@@ -3922,6 +4410,10 @@ function buildAssistantReply(message) {
   }
 
   if (isSummaryRequest(normalized)) return { reply: buildProgressSummary() };
+  if (isChapterWeaknessRequest(normalized)) return buildChapterWeaknessReply(message);
+  if (isRewriteChecklistRequest(normalized)) return prepareRewriteChecklistFromPrompt(message);
+  if (isSectionStructureRequest(normalized)) return prepareSectionStructureFromPrompt(message);
+  if (isNextChapterSessionRequest(normalized)) return prepareNextChapterSessionFromPrompt(message);
   if (isWeeklyPlanCreationRequest(normalized)) return createWeeklyFocusTasksFromState();
   if (isWeeklyPriorityRequest(normalized)) return { reply: buildWeeklyPriorities() };
   if (isPerformanceAdviceRequest(normalized)) return { reply: buildPerformanceAdvice() };
@@ -3942,12 +4434,43 @@ function buildAssistantReply(message) {
   if (chapter) return { reply: buildChapterAdvice(chapter) };
 
   return {
-    reply: "Puedo ayudarte con ocho cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, montar un mini plan semanal, detectar riesgos, proponerte un arranque de 45 minutos, preparar reuniones, responder comentarios y crear tareas.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Créame tres tareas foco para esta semana\n- Detecta mis riesgos de entrega ahora mismo\n- Prepárame la próxima reunión y guárdala\n- Redacta respuesta al comentario más urgente\n- Crear tarea enviar borrador del capítulo 2 para mañana\n- Agendar reunión el martes a las 16:00 con directora sobre metodología"
+    reply: "Puedo ayudarte con diez cosas muy útiles ahora mismo: resumir progreso, priorizar la semana, montar un mini plan semanal, detectar riesgos, proponerte un arranque de 45 minutos, preparar reuniones, responder comentarios, crear tareas, trabajar un capítulo concreto y dejar una vista previa antes de aplicar cambios.\n\nPrueba una de estas:\n- Resúmeme el progreso actual\n- Qué debería priorizar esta semana\n- Créame tres tareas foco para esta semana\n- Detecta mis riesgos de entrega ahora mismo\n- Detecta la sección más floja del capítulo 2\n- Convierte el comentario más urgente del capítulo 2 en checklist de reescritura\n- Propón una estructura para un apartado del capítulo 2\n- Prepárame la próxima reunión y guárdala\n- Redacta respuesta al comentario más urgente\n- Crear tarea enviar borrador del capítulo 2 para mañana"
   };
 }
 
 function isSummaryRequest(normalized) {
   return normalized.includes("resumen") || normalized.includes("resumeme") || normalized.includes("resúmeme") || normalized.includes("resume") || normalized.includes("progreso") || normalized.includes("estado general");
+}
+
+function isChapterWeaknessRequest(normalized) {
+  return normalized.includes("capitulo")
+    && (
+      normalized.includes("seccion mas floja")
+      || normalized.includes("sección más floja")
+      || normalized.includes("parte mas floja")
+      || normalized.includes("parte más floja")
+      || normalized.includes("seccion mas debil")
+      || normalized.includes("sección más débil")
+      || normalized.includes("seccion mas debil")
+    );
+}
+
+function isRewriteChecklistRequest(normalized) {
+  return normalized.includes("capitulo")
+    && normalized.includes("checklist")
+    && (normalized.includes("reescritura") || normalized.includes("rehacer"));
+}
+
+function isSectionStructureRequest(normalized) {
+  return normalized.includes("capitulo")
+    && (normalized.includes("estructura") || normalized.includes("esquema"))
+    && (normalized.includes("apartado") || normalized.includes("seccion"));
+}
+
+function isNextChapterSessionRequest(normalized) {
+  return normalized.includes("capitulo")
+    && normalized.includes("sesion")
+    && (normalized.includes("siguiente") || normalized.includes("proxima") || normalized.includes("prepara"));
 }
 
 function isWeeklyPriorityRequest(normalized) {
@@ -4169,14 +4692,17 @@ function buildSafetyReply() {
   return `Estado de tranquilidad:\n${lines.join("\n")}\n\nMi recomendación: ${snapshot ? "antes de un cambio grande, exporta un respaldo además del punto local." : "crea ahora un punto de restauración y exporta un respaldo antes de tocar algo importante."}`;
 }
 
-function createWeeklyFocusTasksFromState() {
-  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
-  const candidates = buildWeeklyFocusTaskCandidates();
-  const created = [];
+function assistantReplyWithPreview(reply, actions, options = {}) {
+  const pendingAction = createAssistantActionPlan(actions, options);
+  if (!pendingAction) return { reply };
+  return { reply, pendingAction };
+}
 
-  candidates.forEach((candidate) => {
-    if (!candidate?.title || taskExists(candidate.title)) return;
-    const task = {
+function createWeeklyFocusTasksFromState() {
+  const candidates = buildWeeklyFocusTaskCandidates();
+  const created = candidates
+    .filter((candidate) => candidate?.title && !taskExists(candidate.title))
+    .map((candidate) => ({
       id: createId("tk"),
       title: candidate.title,
       area: candidate.area,
@@ -4186,10 +4712,7 @@ function createWeeklyFocusTasksFromState() {
       impact: candidate.impact,
       done: false,
       completedAt: ""
-    };
-    state.tasks.unshift(task);
-    created.push(task);
-  });
+    }));
 
   if (!created.length) {
     return {
@@ -4198,10 +4721,14 @@ function createWeeklyFocusTasksFromState() {
   }
 
   const lines = created.map((task) => `- ${task.title}${task.due ? ` (${formatDate(task.due)})` : ""}`);
-  return {
-    reply: `He montado un mini plan semanal dentro de la app:\n${lines.join("\n")}\n\nLa idea es que esta semana no abras más de tres frentes: escritura, revisión y coordinación.`,
-    toastMessage: "Plan semanal creado desde TeDoc"
-  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de mini plan semanal:\n${lines.join("\n")}\n\nSi la confirmas, la guardo dentro de la app sin abrir más de tres frentes: escritura, revisión y coordinación.`,
+    created.map((task) => ({ type: "create_task", task })),
+    {
+      summary: `Voy a crear ${created.length} tarea${created.length === 1 ? "" : "s"} foco para esta semana.`,
+      toastMessage: "Plan semanal creado desde TeDoc"
+    }
+  );
 }
 
 function preferredAssistantEffort(style, intensity = "medium") {
@@ -4273,7 +4800,38 @@ function buildWeeklyFocusTaskCandidates() {
 
 function findWeakestSection(chapter) {
   if (!chapter?.sections?.length) return null;
-  return [...chapter.sections].sort((a, b) => Number(a.words || 0) - Number(b.words || 0))[0];
+  return [...chapter.sections].sort((a, b) => {
+    const scoreDiff = sectionWeaknessScore(chapter, b) - sectionWeaknessScore(chapter, a);
+    if (scoreDiff !== 0) return scoreDiff;
+    return Number(a.words || 0) - Number(b.words || 0);
+  })[0];
+}
+
+function sectionWeaknessScore(chapter, section) {
+  if (!section) return 0;
+  const averageWords = average((chapter?.sections || []).map((item) => Number(item.words || 0))) || 1;
+  let score = 0;
+  const status = normalizeUserText(section.status || "");
+  if (status.includes("esquema")) score += 5;
+  else if (status.includes("borrador")) score += 4;
+  else if (status.includes("revision")) score += 2;
+  if (Number(section.words || 0) < averageWords * 0.7) score += 3;
+  if (String(section.content || "").trim().length < 220) score += 3;
+  if (!String(section.goal || "").trim()) score += 2;
+  return score;
+}
+
+function buildWeakestSectionExplanation(chapter, section) {
+  if (!chapter || !section) return "No hay datos suficientes para priorizar una sección concreta todavía.";
+  const reasons = [];
+  const averageWords = average((chapter.sections || []).map((item) => Number(item.words || 0))) || 0;
+  if (normalizeUserText(section.status || "").includes("esquema")) reasons.push("sigue en esquema");
+  else if (normalizeUserText(section.status || "").includes("borrador")) reasons.push("aún está en borrador");
+  if (Number(section.words || 0) < averageWords * 0.7) reasons.push("está por debajo del volumen medio del capítulo");
+  if (String(section.content || "").trim().length < 220) reasons.push("todavía tiene poco texto defendible");
+  if (!String(section.goal || "").trim()) reasons.push("no deja clara su función");
+  if (!reasons.length) reasons.push("es la pieza menos cerrada en relación con el resto");
+  return `${section.title} es ahora mismo la parte más expuesta porque ${joinSentenceParts(reasons)}.`;
 }
 
 function taskExists(title) {
@@ -4304,17 +4862,25 @@ function prepareMeetingBriefFromPrompt(message) {
     chapter ? `Empujar ${chapter.title}` : "",
     urgentTask ? `Cerrar o replanificar ${urgentTask.title}` : ""
   ].filter(Boolean);
+  const next = meeting.next || chapter?.due || comment?.due || urgentTask?.due || "";
 
-  meeting.agenda = agendaLines.join("\n");
-  meeting.tasks = taskLines.join("\n");
-  if (!meeting.next) {
-    meeting.next = chapter?.due || comment?.due || urgentTask?.due || "";
-  }
-
-  return {
-    reply: `He preparado y guardado una agenda para ${formatMeetingLabel(meeting)}.\n\nAgenda:\n${agendaLines.map((line) => `- ${line}`).join("\n")}\n\nLa tienes ya dentro de Reuniones y revisión.`,
-    toastMessage: "Agenda guardada desde TeDoc"
-  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de agenda para ${formatMeetingLabel(meeting)}.\n\nAgenda:\n${agendaLines.map((line) => `- ${line}`).join("\n")}\n\nSi la confirmas, la guardo en Reuniones y revisión.`,
+    [{
+      type: "update_meeting_brief",
+      meetingId: meeting.id,
+      meetingLabel: formatMeetingLabel(meeting),
+      date: meeting.date,
+      time: meeting.time,
+      agenda: agendaLines.join("\n"),
+      tasks: taskLines.join("\n"),
+      next
+    }],
+    {
+      summary: `Voy a preparar la agenda de ${formatMeetingLabel(meeting)}.`,
+      toastMessage: "Agenda guardada desde TeDoc"
+    }
+  );
 }
 
 function prepareCommentResponseFromPrompt(message) {
@@ -4325,13 +4891,20 @@ function prepareCommentResponseFromPrompt(message) {
 
   const chapter = state.chapters.find((item) => item.title === comment.chapter);
   const response = buildCommentResponseDraft(comment, chapter);
-  comment.response = response;
-  if (comment.status === "Pendiente") comment.status = "En proceso";
-
-  return {
-    reply: `He redactado y guardado una respuesta de trabajo para el comentario de ${comment.chapter}:\n\n${response}\n\nLa tienes dentro de Reuniones y revisión para ajustarla si quieres.`,
-    toastMessage: "Respuesta al comentario guardada"
-  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de respuesta de trabajo para el comentario de ${comment.chapter}:\n\n${response}\n\nSi la confirmas, la guardo dentro de Reuniones y revisión.`,
+    [{
+      type: "update_review_comment_response",
+      commentId: comment.id,
+      chapterTitle: comment.chapter,
+      response,
+      status: comment.status === "Pendiente" ? "En proceso" : comment.status
+    }],
+    {
+      summary: `Voy a actualizar la respuesta del comentario de ${comment.chapter}.`,
+      toastMessage: "Respuesta al comentario guardada"
+    }
+  );
 }
 
 function buildCommentResponseDraft(comment, chapter) {
@@ -4356,6 +4929,190 @@ function buildCommentResponseDraft(comment, chapter) {
         "- Señal de cierre: dejar el cambio escrito, no solo pensado."
       ];
   return lines.join("\n");
+}
+
+function buildChapterWeaknessReply(message) {
+  const chapter = inferAssistantChapterContext(message);
+  if (!chapter) {
+    return { reply: "Puedo detectar la sección más floja, pero necesito que me digas el capítulo o que exista un capítulo activo." };
+  }
+  const weakestSection = findWeakestSection(chapter);
+  const chapterComment = findOpenCommentForChapter(chapter.title);
+  const openCheck = (chapter.rewriteChecklist || []).filter((item) => !item.done)[0];
+  const lines = [
+    `- Capítulo: ${chapter.title} (${chapter.status}, ${chapter.progress}% de avance).`,
+    weakestSection
+      ? `- Sección más floja: ${weakestSection.title}. ${buildWeakestSectionExplanation(chapter, weakestSection)}`
+      : "- No veo una sección clara todavía; conviene crear estructura mínima primero.",
+    chapterComment
+      ? `- Comentario que más aprieta: ${chapterComment.comment}`
+      : "- No hay comentario abierto sobre este capítulo ahora mismo.",
+    openCheck
+      ? `- Paso abierto de reescritura: ${openCheck.label}`
+      : "- Consejo práctico: convierte la parte más floja en una sesión cerrable antes de abrir otra lectura."
+  ];
+  return { reply: `Lectura rápida del capítulo:\n${lines.join("\n")}` };
+}
+
+function prepareRewriteChecklistFromPrompt(message) {
+  const chapter = inferAssistantChapterContext(message);
+  if (!chapter) {
+    return { reply: "Puedo preparar el checklist, pero necesito saber qué capítulo estás trabajando." };
+  }
+  const comment = findCommentForChapterPrompt(chapter, message);
+  if (!comment) {
+    return { reply: `No encuentro un comentario abierto para ${chapter.title}. Si lo registras primero, te lo convierto en checklist de reescritura.` };
+  }
+  const items = buildRewriteChecklistItems(chapter, comment);
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de checklist de reescritura para ${chapter.title} a partir del comentario abierto:\n${items.map((item) => `- ${item.label}`).join("\n")}\n\nSi la confirmas, la guardo dentro del capítulo.`,
+    [{
+      type: "set_chapter_rewrite_checklist",
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      sourceCommentId: comment.id,
+      sourceCommentText: comment.comment,
+      items
+    }],
+    {
+      summary: `Voy a crear un checklist de reescritura para ${chapter.title}.`,
+      toastMessage: "Checklist de reescritura guardada"
+    }
+  );
+}
+
+function prepareSectionStructureFromPrompt(message) {
+  const chapter = inferAssistantChapterContext(message);
+  if (!chapter) {
+    return { reply: "Puedo proponer una estructura, pero necesito saber qué capítulo quieres tocar." };
+  }
+  const section = findSectionFromPrompt(chapter, message) || findWeakestSection(chapter);
+  const proposal = buildSectionStructureProposal(chapter, section);
+  const note = {
+    id: createId("nt"),
+    title: `Estructura sugerida: ${section ? section.title : chapter.title}`,
+    type: "Decisión",
+    date: todayISO(),
+    text: proposal
+  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de estructura para ${section ? section.title : chapter.title}:\n\n${proposal}\n\nSi la confirmas, la guardo como nota interna del capítulo.`,
+    [{ type: "create_chapter_note", chapterId: chapter.id, chapterTitle: chapter.title, note }],
+    {
+      summary: `Voy a guardar una estructura sugerida para ${chapter.title}.`,
+      toastMessage: "Estructura sugerida guardada"
+    }
+  );
+}
+
+function prepareNextChapterSessionFromPrompt(message) {
+  const chapter = inferAssistantChapterContext(message);
+  if (!chapter) {
+    return { reply: "Puedo preparar la siguiente sesión, pero necesito saber qué capítulo quieres empujar." };
+  }
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
+  const weakestSection = findWeakestSection(chapter);
+  const comment = findOpenCommentForChapter(chapter.title);
+  const due = extractDateFromText(message) || offsetISODate(1);
+  const task = {
+    id: createId("tk"),
+    title: weakestSection ? `Sesión foco: ${chapter.title} · ${weakestSection.title}` : `Sesión foco: ${chapter.title}`,
+    area: "Capítulos",
+    status: inferTaskColumn(due),
+    due,
+    effort: preferredAssistantEffort(style, weakestSection ? "high" : "medium"),
+    impact: "Alto",
+    done: false,
+    completedAt: ""
+  };
+  const note = {
+    id: createId("nt"),
+    title: `Entrada de sesión: ${chapter.title}`,
+    type: "Decisión",
+    date: todayISO(),
+    text: buildNextChapterSessionPlan(chapter, weakestSection, comment)
+  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa para la siguiente sesión de ${chapter.title}:\n- ${task.title}${task.due ? ` (${formatDate(task.due)})` : ""}\n\n${note.text}\n\nSi la confirmas, te guardo la tarea y la nota de entrada.`,
+    [
+      { type: "create_task", task },
+      { type: "create_chapter_note", chapterId: chapter.id, chapterTitle: chapter.title, note }
+    ],
+    {
+      summary: `Voy a preparar la siguiente sesión de ${chapter.title}.`,
+      toastMessage: "Siguiente sesión preparada"
+    }
+  );
+}
+
+function inferAssistantChapterContext(message) {
+  return findChapterFromPrompt(message)
+    || state.chapters.find((chapter) => chapter.id === state.editorChapterId)
+    || state.chapters[0]
+    || null;
+}
+
+function findCommentForChapterPrompt(chapter, message) {
+  const normalized = normalizeUserText(message);
+  const openComments = state.reviewComments.filter((item) => item.chapter === chapter.title && item.status !== "Resuelto");
+  const matched = openComments.find((item) => normalized.includes(normalizeUserText(item.source || "")) || normalized.includes(normalizeUserText(item.comment || "")));
+  return matched || openComments.sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
+}
+
+function buildRewriteChecklistItems(chapter, comment) {
+  const weakestSection = findWeakestSection(chapter);
+  const items = [
+    `Traducir el comentario a un cambio textual concreto: ${comment.comment}`,
+    weakestSection
+      ? `Reabrir "${weakestSection.title}" y decidir qué frase o párrafo debe cambiar primero.`
+      : `Decidir qué apartado de ${chapter.title} se toca primero.`,
+    chapter.argument
+      ? `Reforzar el vínculo con el argumento central del capítulo: ${chapter.argument}.`
+      : `Dejar explícito el argumento o criterio académico que resuelve el comentario.`,
+    "Comprobar si falta evidencia, cita o justificación metodológica antes de cerrar.",
+    "Dejar criterio de cierre visible antes de marcar el comentario como resuelto."
+  ];
+  return items.map((label) => ({
+    id: createId("rw"),
+    label,
+    done: false,
+    sourceCommentId: comment.id,
+    sourceCommentText: comment.comment
+  }));
+}
+
+function findSectionFromPrompt(chapter, message) {
+  if (!chapter?.sections?.length) return null;
+  const normalized = normalizeUserText(message);
+  const indexMatch = normalized.match(/(?:apartado|seccion)\s+(\d+)/);
+  if (indexMatch) {
+    return chapter.sections[Number(indexMatch[1]) - 1] || null;
+  }
+  return chapter.sections.find((section) => normalized.includes(normalizeUserText(section.title))) || null;
+}
+
+function buildSectionStructureProposal(chapter, section) {
+  const target = section || findWeakestSection(chapter);
+  const sectionTitle = target ? target.title : chapter.title;
+  const focusGoal = target?.goal || chapter.goal || "Dejar claro qué sostiene este apartado";
+  const argumentLine = chapter.argument ? `Argumento que no debería perderse: ${chapter.argument}.` : "Argumento pendiente de volver explícito.";
+  return [
+    `Propuesta para ${sectionTitle}:`,
+    `1. Apertura: enuncia el objetivo del apartado y por qué importa aquí. (${focusGoal})`,
+    "2. Desarrollo: presenta una idea central y la evidencia mínima que la sostiene.",
+    "3. Tensión o matiz: introduce el punto que necesita justificar mejor, no solo describir.",
+    `4. Cierre: conecta el apartado con el siguiente paso del capítulo. ${argumentLine}`
+  ].join("\n");
+}
+
+function buildNextChapterSessionPlan(chapter, weakestSection, comment) {
+  const sessionLines = [
+    `Objetivo: ${weakestSection ? `cerrar la parte más floja, ${weakestSection.title}` : `cerrar una pieza concreta de ${chapter.title}`}.`,
+    `Entrada rápida: relee ${comment ? `el comentario "${comment.comment}"` : "la última nota o párrafo abierto"} y define qué cambio textual te llevas a la sesión.`,
+    "Bloque central: reescribe primero una sola unidad defendible, no el capítulo entero.",
+    "Salida: deja una frase cerrada, una tarea visible y un criterio de cierre para la próxima sesión."
+  ];
+  return sessionLines.join("\n");
 }
 
 function findCommentFromPrompt(message) {
@@ -4403,19 +5160,30 @@ function findChapterFromPrompt(message) {
     const chapter = state.chapters[Number(numberMatch[1]) - 1];
     if (chapter) return chapter;
   }
-  return state.chapters.find((chapter) => normalized.includes(normalizeUserText(chapter.title))) || null;
+  return state.chapters.find((chapter) => normalized.includes(normalizeUserText(chapter.title)))
+    || state.chapters.find((chapter) => chapter.id === state.editorChapterId)
+    || state.chapters[0]
+    || null;
 }
 
 function buildChapterAdvice(chapter) {
-  const nextSection = [...chapter.sections].sort((a, b) => Number(a.words || 0) - Number(b.words || 0))[0];
+  const nextSection = findWeakestSection(chapter);
+  const chapterComment = findOpenCommentForChapter(chapter.title);
   const openCheck = chapter.checklist.find((item) => !item.done);
   const lines = [
     `- Estado actual: ${chapter.status} y ${chapter.progress}% de progreso.`,
     `- Siguiente movimiento recomendado: ${nextSection ? `trabajar la sección "${nextSection.title}"` : "cerrar una sección concreta"}.`,
+    chapterComment ? `- Comentario abierto sobre este capítulo: ${chapterComment.comment}` : "- No hay comentario abierto específico sobre este capítulo ahora mismo.",
     `- Control de calidad: ${openCheck ? openCheck.label : "el checklist está bastante bien cubierto"}.`,
     "- Consejo práctico: no abras más frentes; intenta dejar hoy una decisión cerrada o un párrafo completo."
   ];
   return `Sobre ${chapter.title}:\n${lines.join("\n")}`;
+}
+
+function findOpenCommentForChapter(chapterTitle) {
+  return [...state.reviewComments]
+    .filter((comment) => comment.chapter === chapterTitle && comment.status !== "Resuelto")
+    .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
 }
 
 function createMeetingFromPrompt(message) {
@@ -4426,7 +5194,7 @@ function createMeetingFromPrompt(message) {
   const attendees = extractAttendees(message);
   const agenda = extractTopic(message) || "Seguimiento de tesis";
   const type = inferMeetingType(attendees, agenda);
-  state.meetings.unshift({
+  const meeting = {
     id: createId("mt"),
     date,
     time,
@@ -4436,11 +5204,15 @@ function createMeetingFromPrompt(message) {
     decisions: "",
     tasks: "",
     next: ""
-  });
-  return {
-    reply: `Listo. He agendado una reunión para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. La he guardado en Reuniones y revisión.`,
-    toastMessage: "Reunión creada desde TeDoc"
   };
+  return assistantReplyWithPreview(
+    `Te dejo la vista previa de una reunión para el ${formatDate(date)} a las ${time}${attendees ? ` con ${attendees}` : ""}. Si la confirmas, la guardo en Reuniones y revisión.`,
+    [{ type: "create_meeting", meeting }],
+    {
+      summary: `Voy a agendar una reunión para el ${formatDate(date)} a las ${time}.`,
+      toastMessage: "Reunión creada desde TeDoc"
+    }
+  );
 }
 
 function createTaskFromPrompt(message) {
@@ -4451,7 +5223,7 @@ function createTaskFromPrompt(message) {
   const effort = extractEffort(message);
   const area = inferTaskArea(message);
   const status = inferTaskColumn(due);
-  state.tasks.unshift({
+  const task = {
     id: createId("tk"),
     title,
     area,
@@ -4461,11 +5233,15 @@ function createTaskFromPrompt(message) {
     impact,
     done: false,
     completedAt: ""
-  });
-  return {
-    reply: `He creado la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. La he colocado en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Después"}.`,
-    toastMessage: "Tarea creada desde TeDoc"
   };
+  return assistantReplyWithPreview(
+    `Te dejo la vista previa de la tarea "${title}"${due ? ` para el ${formatDate(due)}` : ""}. Si la confirmas, la coloco en ${status === "today" ? "Hoy" : status === "week" ? "Esta semana" : "Después"}.`,
+    [{ type: "create_task", task }],
+    {
+      summary: `Voy a crear la tarea "${title}".`,
+      toastMessage: "Tarea creada desde TeDoc"
+    }
+  );
 }
 
 function convertCommentToTaskFromPrompt(message) {
@@ -4490,13 +5266,20 @@ function convertCommentToTaskFromPrompt(message) {
     done: false,
     completedAt: ""
   };
-  state.tasks.unshift(task);
-  if (comment.status === "Pendiente") comment.status = "En proceso";
-
-  return {
-    reply: `He convertido el comentario abierto de ${comment.chapter} en una tarea${due ? ` con fecha ${formatDate(due)}` : ""}. La he dejado en ${task.status === "today" ? "Hoy" : task.status === "week" ? "Esta semana" : "Después"}.`,
-    toastMessage: "Comentario convertido en tarea"
-  };
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa para convertir el comentario abierto de ${comment.chapter} en una tarea${due ? ` con fecha ${formatDate(due)}` : ""}. Si la confirmas, también dejo el comentario en proceso.`,
+    [{
+      type: "convert_review_comment_to_task",
+      commentId: comment.id,
+      chapterTitle: comment.chapter,
+      status: comment.status === "Pendiente" ? "En proceso" : comment.status,
+      task
+    }],
+    {
+      summary: `Voy a convertir el comentario de ${comment.chapter} en una tarea.`,
+      toastMessage: "Comentario convertido en tarea"
+    }
+  );
 }
 
 function createReviewCommentFromPrompt(message) {
@@ -4507,7 +5290,7 @@ function createReviewCommentFromPrompt(message) {
   const source = inferCommentSource(message);
   const priority = inferCommentPriority(message);
   const due = extractDateFromText(message);
-  state.reviewComments.unshift({
+  const reviewComment = {
     id: createId("rv"),
     chapter: chapter ? chapter.title : "Sin capítulo",
     source,
@@ -4516,12 +5299,16 @@ function createReviewCommentFromPrompt(message) {
     status: "Pendiente",
     priority,
     due
-  });
-
-  return {
-    reply: `He registrado un comentario de ${source}${chapter ? ` en ${chapter.title}` : ""}${due ? ` con fecha objetivo ${formatDate(due)}` : ""}.`,
-    toastMessage: "Comentario creado desde TeDoc"
   };
+
+  return assistantReplyWithPreview(
+    `Te dejo la vista previa del comentario de ${source}${chapter ? ` en ${chapter.title}` : ""}${due ? ` con fecha objetivo ${formatDate(due)}` : ""}. Si lo confirmas, lo registro en Reuniones y revisión.`,
+    [{ type: "create_review_comment", reviewComment }],
+    {
+      summary: `Voy a registrar un comentario de ${source}.`,
+      toastMessage: "Comentario creado desde TeDoc"
+    }
+  );
 }
 
 function createChapterNoteFromPrompt(message) {
@@ -4535,19 +5322,22 @@ function createChapterNoteFromPrompt(message) {
     return { reply: "Puedo guardar la nota, pero me falta el contenido. Ejemplo: Añade nota al capítulo 1: reforzar el cierre de la sección teórica." };
   }
 
-  chapter.notes.unshift({
+  const note = {
     id: createId("nt"),
     title: noteTitleFromText(text),
     type: inferNoteType(message),
     date: extractDateFromText(message) || todayISO(),
     text
-  });
-  chapter.editorUpdatedAt = new Date().toISOString();
-
-  return {
-    reply: `He guardado una nota en ${chapter.title}.`,
-    toastMessage: "Nota creada desde TeDoc"
   };
+
+  return assistantReplyWithPreview(
+    `Te dejo la vista previa de una nota para ${chapter.title}. Si la confirmas, la guardo en el capítulo.`,
+    [{ type: "create_chapter_note", chapterId: chapter.id, chapterTitle: chapter.title, note }],
+    {
+      summary: `Voy a guardar una nota en ${chapter.title}.`,
+      toastMessage: "Nota creada desde TeDoc"
+    }
+  );
 }
 
 function findUrgentComment() {

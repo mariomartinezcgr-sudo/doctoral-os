@@ -1,5 +1,6 @@
 const assert = require("assert");
 const fs = require("fs");
+const http = require("http");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
@@ -210,6 +211,47 @@ async function main() {
     assert.ok(String(ownerApp.body).includes("Sistema doctoral"));
   });
 
+  await withMockOpenAI(BASE_PORT + 20, async (openAIUrl) => {
+    await withServer(BASE_PORT + 3, { NODE_ENV: "test", OPENAI_API_KEY: "test-key", OPENAI_API_URL: openAIUrl }, async ({ request }) => {
+      const email = `assistant-${Date.now()}@example.com`;
+      const register = await request("/api/register", {
+        method: "POST",
+        body: { email, password: "password123", name: "Assistant Preview" }
+      });
+      assert.equal(register.status, 201);
+
+      const assistantState = {
+        project: { name: "Tesis IA", candidate: "Assistant Preview" },
+        tasks: [],
+        chapters: [{ id: "ch-1", title: "Introducción", status: "Borrador", progress: 35, due: "", words: 1200, target: 5000, sections: [], checklist: [] }]
+      };
+
+      const assistant = await request("/api/assistant", {
+        method: "POST",
+        cookie: register.cookie,
+        body: { message: "Crear tarea enviar borrador del capítulo 1 para mañana", state: assistantState }
+      });
+      assert.equal(assistant.status, 200);
+      assert.equal(assistant.body.mode, "openai");
+      assert.ok(assistant.body.pendingAction);
+      assert.equal(Array.isArray(assistant.body.pendingAction.actions), true);
+      assert.equal(assistant.body.pendingAction.actions[0].type, "create_task");
+      assert.equal(Array.isArray(assistant.body.state.tasks), true);
+      assert.equal(assistant.body.state.tasks.length, 0);
+      assert.ok(String(assistant.body.reply).toLowerCase().includes("vista previa"));
+
+      const me = await request("/api/me", {
+        method: "GET",
+        cookie: register.cookie
+      });
+      assert.equal(me.status, 200);
+      assert.equal(Array.isArray(me.body.state.tasks), true);
+      assert.equal(me.body.state.tasks.length, 0);
+      assert.ok(Array.isArray(me.body.state.assistantThread));
+      assert.ok(me.body.state.assistantThread.some((message) => String(message.text || "").toLowerCase().includes("vista previa")));
+    });
+  });
+
   console.log("backend tests passed");
 }
 
@@ -276,6 +318,62 @@ async function request(baseUrl, pathname, options) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withMockOpenAI(port, run) {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/responses") {
+      res.writeHead(404);
+      res.end("not found");
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    requests.push(body);
+    const isToolReturn = Boolean(body.previous_response_id);
+    const payload = isToolReturn
+      ? {
+          id: "resp-2",
+          model: "gpt-5.4-mini",
+          output_text: "Te dejo una vista previa para crear la tarea y que la confirmes.",
+          output: []
+        }
+      : {
+          id: "resp-1",
+          model: "gpt-5.4-mini",
+          output: [
+            {
+              type: "function_call",
+              id: "call-1",
+              call_id: "call-1",
+              name: "create_task",
+              arguments: JSON.stringify({
+                title: "Enviar borrador del capítulo 1",
+                due: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+                area: "Capítulos",
+                status: "week",
+                effort: "45 min",
+                impact: "Alto"
+              })
+            }
+          ]
+        };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(payload));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  try {
+    await run(`http://127.0.0.1:${port}/v1/responses`, requests);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 main()
