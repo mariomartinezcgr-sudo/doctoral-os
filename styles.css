@@ -4506,6 +4506,11 @@ tr:last-child td {
   margin-top: 6px;
 }
 
+.coming-soon-private-link {
+  min-width: 220px;
+  justify-content: center;
+}
+
 .coming-soon-note {
   margin-bottom: 0;
   color: #6b757b;
@@ -4556,6 +4561,10 @@ tr:last-child td {
   }
 
   .coming-soon-actions .button {
+    width: 100%;
+  }
+
+  .coming-soon-actions .coming-soon-private-link {
     width: 100%;
   }
 
