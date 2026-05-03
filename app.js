@@ -73,6 +73,7 @@ const defaultState = {
   literatureFilter: "",
   literatureCitationId: "",
   literatureCitationStyle: "APA 7",
+  assistantStyleMemory: createInitialAssistantStyleMemory(),
   onboarding: createInitialOnboardingState(),
   project: {
     name: "Mi tesis doctoral",
@@ -247,6 +248,198 @@ function persistSnapshots(snapshots) {
   }
 }
 
+function createInitialAssistantStyleMemory() {
+  return {
+    explicit: {
+      planningDepth: "auto",
+      focusMode: "auto",
+      workBlock: "auto",
+      meetingMode: "auto"
+    },
+    learned: {
+      recommendationTone: "direct",
+      focusStyle: "single",
+      workBlock: "steady",
+      meetingStyle: "structured",
+      executionBias: "mixed",
+      avgBlockMinutes: 45,
+      openFronts: 0,
+      dominantArea: "General",
+      frictionLevel: "low"
+    },
+    summary: "",
+    updatedAt: ""
+  };
+}
+
+function normalizeAssistantStyleMemory(memory) {
+  const base = createInitialAssistantStyleMemory();
+  const merged = deepMerge(base, memory || {});
+  merged.explicit.planningDepth = ["auto", "direct", "detailed"].includes(merged.explicit.planningDepth) ? merged.explicit.planningDepth : "auto";
+  merged.explicit.focusMode = ["auto", "single", "balanced"].includes(merged.explicit.focusMode) ? merged.explicit.focusMode : "auto";
+  merged.explicit.workBlock = ["auto", "short", "deep"].includes(merged.explicit.workBlock) ? merged.explicit.workBlock : "auto";
+  merged.explicit.meetingMode = ["auto", "brief", "structured"].includes(merged.explicit.meetingMode) ? merged.explicit.meetingMode : "auto";
+  merged.summary = String(merged.summary || "");
+  merged.updatedAt = String(merged.updatedAt || "");
+  return merged;
+}
+
+function refreshAssistantStyleMemory(target = state) {
+  if (!target || typeof target !== "object") return createInitialAssistantStyleMemory();
+  const current = normalizeAssistantStyleMemory(target.assistantStyleMemory);
+  const learned = buildAssistantStyleSignals(target);
+  const summary = buildAssistantStyleSummary({ explicit: current.explicit, learned });
+  const previousSnapshot = JSON.stringify({ learned: current.learned, summary: current.summary });
+  const nextSnapshot = JSON.stringify({ learned, summary });
+  target.assistantStyleMemory = {
+    ...current,
+    learned,
+    summary,
+    updatedAt: previousSnapshot === nextSnapshot ? current.updatedAt : new Date().toISOString()
+  };
+  return target.assistantStyleMemory;
+}
+
+function buildAssistantStyleSignals(target = state) {
+  const tasks = Array.isArray(target.tasks) ? target.tasks : [];
+  const writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
+  const meetings = Array.isArray(target.meetings) ? target.meetings : [];
+  const reviewComments = Array.isArray(target.reviewComments) ? target.reviewComments : [];
+  const chapters = Array.isArray(target.chapters) ? target.chapters : [];
+  const completedRecent = [...tasks]
+    .filter((task) => task.done)
+    .sort((a, b) => String(b.completedAt || "").localeCompare(String(a.completedAt || "")))
+    .slice(0, 8);
+  const openTasks = tasks.filter((task) => !task.done);
+  const effortSamples = [
+    ...completedRecent.map((task) => effortToMinutes(task.effort)),
+    ...openTasks.slice(0, 8).map((task) => effortToMinutes(task.effort)),
+    ...writingLog.slice(0, 8).map((entry) => Number(entry.minutes || 0))
+  ].filter((value) => Number(value) > 0);
+  const avgBlockMinutes = Math.round(average(effortSamples) || 45);
+  const workBlock = avgBlockMinutes <= 40 ? "short" : avgBlockMinutes >= 85 ? "deep" : "steady";
+  const openAreas = uniqueNormalizedValues(openTasks.map((task) => task.area || "General"));
+  const recentAreas = uniqueNormalizedValues(completedRecent.map((task) => task.area || "General"));
+  const focusStyle = openAreas.length <= 2 && openTasks.length <= 4 && recentAreas.length <= 2 ? "single" : "balanced";
+  const meetingDensity = average(meetings.slice(0, 4).map((meeting) => {
+    const agendaSize = String(meeting.agenda || "").trim().length;
+    const decisionSize = String(meeting.decisions || "").trim().length;
+    const taskSize = String(meeting.tasks || "").trim().length;
+    return agendaSize + decisionSize + taskSize;
+  }).filter(Boolean));
+  const meetingStyle = meetingDensity >= 160 ? "structured" : "brief";
+  const recommendationTone = workBlock === "short" || openTasks.length >= 6 ? "direct" : "detailed";
+  const frictionLevel = openTasks.length >= 7 || reviewComments.filter((comment) => comment.status !== "Resuelto").length >= 4 ? "high" : openTasks.length >= 4 ? "medium" : "low";
+  const writingScore = writingLog.slice(0, 8).length + chaptersTouchedRecently(chapters, 7);
+  const reviewScore = reviewComments.filter((comment) => comment.status !== "Resuelto").length + tasks.filter((task) => !task.done && normalizeUserText(task.area).includes("revision")).length;
+  const coordinationScore = meetings.filter((meeting) => meeting.date && meeting.date >= todayISO()).length + tasks.filter((task) => !task.done && normalizeUserText(task.area).includes("reunion")).length;
+  const executionBias = dominantAssistantExecutionBias({ writingScore, reviewScore, coordinationScore });
+  const dominantArea = dominantTaskArea(tasks, writingLog) || "General";
+
+  return {
+    recommendationTone,
+    focusStyle,
+    workBlock,
+    meetingStyle,
+    executionBias,
+    avgBlockMinutes,
+    openFronts: openAreas.length,
+    dominantArea,
+    frictionLevel
+  };
+}
+
+function buildAssistantStyleSummary(memory) {
+  const resolved = resolveAssistantStyle(memory);
+  const blockText = resolved.workBlock === "short"
+    ? "bloques cortos"
+    : resolved.workBlock === "deep"
+      ? "bloques profundos"
+      : "bloques medios";
+  const focusText = resolved.focusMode === "single" ? "una prioridad clara" : "dos o tres frentes coordinados";
+  const toneText = resolved.planningDepth === "direct" ? "planes directos" : "planes más desarrollados";
+  const biasText = resolved.executionBias === "writing"
+    ? "escritura"
+    : resolved.executionBias === "review"
+      ? "revisión"
+      : resolved.executionBias === "coordination"
+        ? "coordinación"
+        : "trabajo mixto";
+  return `TeDoc te ve más cómodo con ${blockText}, ${focusText} y ${toneText}. Tu sesgo actual cae en ${biasText}.`;
+}
+
+function resolveAssistantStyle(memory = state.assistantStyleMemory) {
+  const normalized = normalizeAssistantStyleMemory(memory);
+  const planningDepth = normalized.explicit.planningDepth !== "auto"
+    ? normalized.explicit.planningDepth
+    : normalized.learned.recommendationTone === "detailed" ? "detailed" : "direct";
+  const focusMode = normalized.explicit.focusMode !== "auto"
+    ? normalized.explicit.focusMode
+    : normalized.learned.focusStyle === "balanced" ? "balanced" : "single";
+  const workBlock = normalized.explicit.workBlock !== "auto"
+    ? normalized.explicit.workBlock
+    : normalized.learned.workBlock === "deep" ? "deep" : normalized.learned.workBlock === "short" ? "short" : "steady";
+  const meetingMode = normalized.explicit.meetingMode !== "auto"
+    ? normalized.explicit.meetingMode
+    : normalized.learned.meetingStyle === "brief" ? "brief" : "structured";
+  return {
+    ...normalized,
+    planningDepth,
+    focusMode,
+    workBlock,
+    meetingMode,
+    executionBias: normalized.learned.executionBias,
+    dominantArea: normalized.learned.dominantArea,
+    frictionLevel: normalized.learned.frictionLevel,
+    avgBlockMinutes: normalized.learned.avgBlockMinutes,
+    openFronts: normalized.learned.openFronts
+  };
+}
+
+function uniqueNormalizedValues(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function effortToMinutes(effort) {
+  const text = String(effort || "").trim();
+  if (!text) return 0;
+  const match = text.match(/(\d{1,3})\s*(min|hora|horas|h)\b/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  return /hora|horas|h/i.test(match[2]) ? amount * 60 : amount;
+}
+
+function chaptersTouchedRecently(chapters, days) {
+  const cutoff = Date.now() - days * 86400000;
+  return (Array.isArray(chapters) ? chapters : []).filter((chapter) => {
+    const stamp = new Date(String(chapter.editorUpdatedAt || "")).getTime();
+    return Number.isFinite(stamp) && stamp >= cutoff;
+  }).length;
+}
+
+function dominantAssistantExecutionBias(scores) {
+  const entries = Object.entries(scores || {}).sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+  if (!entries[0] || Number(entries[0][1] || 0) === 0) return "mixed";
+  if (entries[1] && Number(entries[0][1] || 0) - Number(entries[1][1] || 0) <= 1) return "mixed";
+  if (entries[0][0] === "writingScore") return "writing";
+  if (entries[0][0] === "reviewScore") return "review";
+  if (entries[0][0] === "coordinationScore") return "coordination";
+  return "mixed";
+}
+
+function dominantTaskArea(tasks, writingLog) {
+  const counts = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const label = String(task.area || "General").trim() || "General";
+    counts.set(label, (counts.get(label) || 0) + 1);
+  });
+  if ((Array.isArray(writingLog) ? writingLog : []).length) {
+    counts.set("Capítulos", (counts.get("Capítulos") || 0) + writingLog.length);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted[0]?.[0] || "";
+}
+
 function clearDemoQuery() {
   const url = new URL(window.location.href);
   url.searchParams.delete(DEMO_QUERY_PARAM);
@@ -262,6 +455,7 @@ function ensureStateShape(target) {
   target.writingLog = Array.isArray(target.writingLog) ? target.writingLog : [];
   target.forumTopics = Array.isArray(target.forumTopics) ? target.forumTopics : [];
   target.assistantThread = Array.isArray(target.assistantThread) ? target.assistantThread : [];
+  target.assistantStyleMemory = normalizeAssistantStyleMemory(target.assistantStyleMemory);
   target.onboarding = normalizeOnboardingState(target.onboarding, target.project?.candidate);
   target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
   target.literatureCitationStyle = ["APA 7", "MLA 9", "Chicago", "BibTeX"].includes(target.literatureCitationStyle) ? target.literatureCitationStyle : "APA 7";
@@ -331,6 +525,7 @@ function ensureStateShape(target) {
   if (!["day", "week"].includes(target.analyticsRange)) {
     target.analyticsRange = "week";
   }
+  refreshAssistantStyleMemory(target);
   return target;
 }
 
@@ -363,6 +558,7 @@ function createFreshState(user = {}) {
     writingLog: [],
     forumTopics: [],
     assistantThread: createInitialAssistantThread(),
+    assistantStyleMemory: createInitialAssistantStyleMemory(),
     analyticsRange: "week"
   });
 }
@@ -1690,6 +1886,19 @@ function handleScreenClick(event) {
 
   if (action === "assistant-export") {
     exportData();
+    return;
+  }
+
+  if (action === "assistant-style-pref") {
+    updateAssistantStylePreference(target.dataset.key, target.dataset.value);
+    return;
+  }
+
+  if (action === "assistant-style-reset") {
+    state.assistantStyleMemory = createInitialAssistantStyleMemory();
+    refreshAssistantStyleMemory(state);
+    saveState("Memoria de estilo reiniciada");
+    render();
     return;
   }
 
@@ -3338,6 +3547,8 @@ function renderAssistant() {
           </div>
         </div>
 
+        ${renderAssistantStyleCard()}
+
         ${renderAssistantSafetyCard()}
 
         <article class="card">
@@ -3465,6 +3676,77 @@ function renderAssistantSafetyCard() {
   `;
 }
 
+function renderAssistantStyleCard() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
+  return `
+    <article class="card assistant-style-card">
+      <p class="card-kicker">Memoria de estilo</p>
+      <h2>Cómo cree TeDoc que trabajas mejor</h2>
+      <p class="muted">${escapeHtml(style.summary || buildAssistantStyleSummary(style))}</p>
+      <div class="assistant-style-metrics">
+        <span>${escapeHtml(style.workBlock === "short" ? "Bloques cortos" : style.workBlock === "deep" ? "Bloques profundos" : "Bloques medios")}</span>
+        <span>${escapeHtml(style.focusMode === "single" ? "Un frente claro" : "Frentes equilibrados")}</span>
+        <span>${escapeHtml(style.planningDepth === "direct" ? "Planes directos" : "Planes detallados")}</span>
+        <span>${escapeHtml(style.meetingMode === "brief" ? "Reuniones breves" : "Reuniones estructuradas")}</span>
+      </div>
+      <div class="assistant-style-pref-group">
+        <strong>Planes</strong>
+        <div class="assistant-style-pref-row">
+          ${assistantStylePrefButton("planningDepth", "auto", "Auto", state.assistantStyleMemory.explicit.planningDepth)}
+          ${assistantStylePrefButton("planningDepth", "direct", "Directos", state.assistantStyleMemory.explicit.planningDepth)}
+          ${assistantStylePrefButton("planningDepth", "detailed", "Detallados", state.assistantStyleMemory.explicit.planningDepth)}
+        </div>
+      </div>
+      <div class="assistant-style-pref-group">
+        <strong>Foco</strong>
+        <div class="assistant-style-pref-row">
+          ${assistantStylePrefButton("focusMode", "auto", "Auto", state.assistantStyleMemory.explicit.focusMode)}
+          ${assistantStylePrefButton("focusMode", "single", "Un frente", state.assistantStyleMemory.explicit.focusMode)}
+          ${assistantStylePrefButton("focusMode", "balanced", "Equilibrado", state.assistantStyleMemory.explicit.focusMode)}
+        </div>
+      </div>
+      <div class="assistant-style-pref-group">
+        <strong>Bloques</strong>
+        <div class="assistant-style-pref-row">
+          ${assistantStylePrefButton("workBlock", "auto", "Auto", state.assistantStyleMemory.explicit.workBlock)}
+          ${assistantStylePrefButton("workBlock", "short", "Cortos", state.assistantStyleMemory.explicit.workBlock)}
+          ${assistantStylePrefButton("workBlock", "deep", "Profundos", state.assistantStyleMemory.explicit.workBlock)}
+        </div>
+      </div>
+      <div class="assistant-style-pref-group">
+        <strong>Reuniones</strong>
+        <div class="assistant-style-pref-row">
+          ${assistantStylePrefButton("meetingMode", "auto", "Auto", state.assistantStyleMemory.explicit.meetingMode)}
+          ${assistantStylePrefButton("meetingMode", "brief", "Breves", state.assistantStyleMemory.explicit.meetingMode)}
+          ${assistantStylePrefButton("meetingMode", "structured", "Estructuradas", state.assistantStyleMemory.explicit.meetingMode)}
+        </div>
+      </div>
+      <div class="summary-actions">
+        <button class="ghost-button" data-action="assistant-style-reset" type="button">Reiniciar memoria</button>
+      </div>
+    </article>
+  `;
+}
+
+function assistantStylePrefButton(key, value, label, currentValue) {
+  return `<button class="tiny-button ${currentValue === value ? "is-active" : ""}" data-action="assistant-style-pref" data-key="${key}" data-value="${value}" type="button">${label}</button>`;
+}
+
+function updateAssistantStylePreference(key, value) {
+  const allowed = {
+    planningDepth: ["auto", "direct", "detailed"],
+    focusMode: ["auto", "single", "balanced"],
+    workBlock: ["auto", "short", "deep"],
+    meetingMode: ["auto", "brief", "structured"]
+  };
+  if (!allowed[key] || !allowed[key].includes(value)) return;
+  state.assistantStyleMemory = normalizeAssistantStyleMemory(state.assistantStyleMemory);
+  state.assistantStyleMemory.explicit[key] = value;
+  refreshAssistantStyleMemory(state);
+  saveState("Preferencia de estilo guardada");
+  render();
+}
+
 function buildAssistantClientMeta() {
   return {
     authStatus: auth.status,
@@ -3474,6 +3756,7 @@ function buildAssistantClientMeta() {
     lastExportedAt: safety.lastExportedAt,
     lastRestoredAt: safety.lastRestoredAt,
     snapshotCount: loadSnapshots().length,
+    styleSummary: state.assistantStyleMemory?.summary || "",
     demoMode
   };
 }
@@ -3753,6 +4036,7 @@ function buildProgressSummary() {
 
 function buildWeeklyPriorities() {
   const analytics = buildAnalyticsSnapshot();
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const lines = [];
   const urgentComment = findUrgentComment();
   const urgentTask = [...state.tasks]
@@ -3771,7 +4055,11 @@ function buildWeeklyPriorities() {
     lines.push("- Convierte una lectura activa en un párrafo útil en lugar de abrir más fuentes esta semana.");
   }
   if (!lines.length) lines.push("- Crea un capítulo activo o una tarea semanal para empezar a mover la tesis.");
-  return `Te propongo este foco para la semana:\n${lines.join("\n")}\n\nRegla simple: una prioridad de escritura, una de revisión y una administrativa como máximo.`;
+  const trimmed = style.focusMode === "single" ? lines.slice(0, 2) : lines.slice(0, 4);
+  const close = style.focusMode === "single"
+    ? "Según cómo sueles trabajar, te conviene salir con una prioridad central y un solo apoyo secundario."
+    : "Según tu patrón actual, puedes sostener dos o tres frentes coordinados si cada uno queda muy claro.";
+  return `Te propongo este foco para la semana:\n${trimmed.join("\n")}\n\n${close}`;
 }
 
 function buildPerformanceAdvice() {
@@ -3822,29 +4110,51 @@ function buildRiskRadar() {
 }
 
 function buildWarmStartPlan() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const urgentTask = nextOpenTask();
   const chapter = nextChapterToPush();
   const urgentComment = findUrgentComment();
-  const lines = [
-    `- Min 0-10: reabre ${urgentTask ? `"${urgentTask.title}"` : chapter ? chapter.title : "tu capítulo principal"} y define una sola micro-meta cerrable.`,
-    `- Min 10-30: trabaja en ${urgentComment ? `la respuesta al comentario de ${urgentComment.chapter}` : chapter ? `la parte más floja de ${chapter.title}` : "un párrafo o decisión concreta"} sin abrir lecturas nuevas.`,
-    `- Min 30-45: deja salida preparada. Crea o ajusta una tarea con fecha y anota qué queda vivo para la siguiente sesión.`
-  ];
-  return `Plan de arranque de 45 minutos:\n${lines.join("\n")}\n\nRegla simple: acaba con una siguiente acción visible, no con una sensación difusa de haber avanzado.`;
+  const lines = style.workBlock === "short"
+    ? [
+        `- Min 0-8: reabre ${urgentTask ? `"${urgentTask.title}"` : chapter ? chapter.title : "tu capítulo principal"} y define una sola micro-meta cerrable.`,
+        `- Min 8-25: trabaja en ${urgentComment ? `la respuesta al comentario de ${urgentComment.chapter}` : chapter ? `la parte más floja de ${chapter.title}` : "un párrafo o decisión concreta"} sin abrir lecturas nuevas.`,
+        "- Min 25-35: deja una nota o decisión cerrada para no perder continuidad.",
+        "- Min 35-45: crea o ajusta la siguiente tarea antes de salir."
+      ]
+    : style.workBlock === "deep"
+      ? [
+          `- Min 0-10: despeja ruido y reabre ${urgentTask ? `"${urgentTask.title}"` : chapter ? chapter.title : "tu capítulo principal"} con una meta concreta.`,
+          `- Min 10-35: bloque largo sobre ${urgentComment ? `la respuesta al comentario de ${urgentComment.chapter}` : chapter ? `la parte más floja de ${chapter.title}` : "una sección concreta"} sin multitarea.`,
+          "- Min 35-45: deja salida preparada con tarea, criterio de cierre y siguiente punto de entrada."
+        ]
+      : [
+          `- Min 0-10: reabre ${urgentTask ? `"${urgentTask.title}"` : chapter ? chapter.title : "tu capítulo principal"} y define una sola micro-meta cerrable.`,
+          `- Min 10-30: trabaja en ${urgentComment ? `la respuesta al comentario de ${urgentComment.chapter}` : chapter ? `la parte más floja de ${chapter.title}` : "un párrafo o decisión concreta"} sin abrir lecturas nuevas.`,
+          `- Min 30-45: deja salida preparada. Crea o ajusta una tarea con fecha y anota qué queda vivo para la siguiente sesión.`
+        ];
+  return `Plan de arranque de 45 minutos:\n${lines.join("\n")}\n\n${style.workBlock === "short" ? "TeDoc está inclinando el plan a bloques cortos porque ese parece tu patrón más sostenible." : style.workBlock === "deep" ? "TeDoc está protegiendo un bloque más profundo porque sueles aprovechar mejor sesiones largas." : "Regla simple: acaba con una siguiente acción visible, no con una sensación difusa de haber avanzado."}`;
 }
 
 function buildCommentActionPlan() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const comment = findUrgentComment();
   if (!comment) {
     return "No veo comentarios pendientes ahora mismo. Si quieres, puedo ayudarte a convertir una reunión o una nota en una tarea semanal concreta.";
   }
 
-  const lines = [
-    `- Comentario a convertir: ${comment.comment}`,
-    `- Capítulo afectado: ${comment.chapter}.`,
-    `- Primer movimiento: redacta una respuesta tentativa o crea una tarea específica para cerrar el punto.`,
-    `- Criterio de cierre: deja visible qué evidencia, texto o decisión haría que este comentario pase a resuelto.`
-  ];
+  const lines = style.planningDepth === "detailed"
+    ? [
+        `- Comentario a convertir: ${comment.comment}`,
+        `- Capítulo afectado: ${comment.chapter}.`,
+        `- Primer movimiento: redacta una respuesta tentativa o crea una tarea específica para cerrar el punto.`,
+        `- Segundo movimiento: identifica qué parte del texto hay que tocar antes de la próxima revisión.`,
+        `- Criterio de cierre: deja visible qué evidencia, texto o decisión haría que este comentario pase a resuelto.`
+      ]
+    : [
+        `- Comentario a convertir: ${comment.comment}`,
+        `- Capítulo afectado: ${comment.chapter}.`,
+        `- Primer movimiento: deja una respuesta tentativa y una tarea concreta para cerrarlo.`
+      ];
   return `Foco de revisión:\n${lines.join("\n")}\n\nSi quieres, también puedo convertir este comentario en tarea desde aquí.`;
 }
 
@@ -3860,6 +4170,7 @@ function buildSafetyReply() {
 }
 
 function createWeeklyFocusTasksFromState() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const candidates = buildWeeklyFocusTaskCandidates();
   const created = [];
 
@@ -3893,7 +4204,18 @@ function createWeeklyFocusTasksFromState() {
   };
 }
 
+function preferredAssistantEffort(style, intensity = "medium") {
+  if (style.workBlock === "short") {
+    return intensity === "high" ? "45 min" : intensity === "low" ? "20 min" : "30 min";
+  }
+  if (style.workBlock === "deep") {
+    return intensity === "high" ? "120 min" : intensity === "low" ? "45 min" : "90 min";
+  }
+  return intensity === "high" ? "90 min" : intensity === "low" ? "30 min" : "45 min";
+}
+
 function buildWeeklyFocusTaskCandidates() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const chapter = nextChapterToPush();
   const comment = findUrgentComment();
   const meeting = upcomingMeeting();
@@ -3905,7 +4227,7 @@ function buildWeeklyFocusTaskCandidates() {
       area: "Revisión",
       status: inferTaskColumn(comment.due || ""),
       due: comment.due || "",
-      effort: comment.priority === "Alta" ? "90 min" : "45 min",
+      effort: preferredAssistantEffort(style, comment.priority === "Alta" ? "high" : "medium"),
       impact: comment.priority === "Alta" ? "Alto" : "Medio"
     });
   }
@@ -3919,7 +4241,7 @@ function buildWeeklyFocusTaskCandidates() {
       area: "Capítulos",
       status: inferTaskColumn(chapter.due || ""),
       due: chapter.due || "",
-      effort: "90 min",
+      effort: preferredAssistantEffort(style, "high"),
       impact: "Alto"
     });
   }
@@ -3930,7 +4252,7 @@ function buildWeeklyFocusTaskCandidates() {
       area: "Reuniones",
       status: inferTaskColumn(meeting.date || ""),
       due: meeting.date || "",
-      effort: "30 min",
+      effort: preferredAssistantEffort(style, "low"),
       impact: "Medio"
     });
   }
@@ -3941,12 +4263,12 @@ function buildWeeklyFocusTaskCandidates() {
       area: "General",
       status: "week",
       due: offsetISODate(2),
-      effort: "45 min",
+      effort: preferredAssistantEffort(style, "medium"),
       impact: "Medio"
     });
   }
 
-  return candidates.slice(0, 3);
+  return candidates.slice(0, style.focusMode === "single" ? 2 : 3);
 }
 
 function findWeakestSection(chapter) {
@@ -3960,6 +4282,7 @@ function taskExists(title) {
 }
 
 function prepareMeetingBriefFromPrompt(message) {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const meeting = findMeetingFromPrompt(message);
   if (!meeting) {
     return { reply: "No encuentro una reunión próxima para preparar. Si quieres, puedo agendar una primero y luego dejarte la agenda guardada." };
@@ -3975,7 +4298,7 @@ function prepareMeetingBriefFromPrompt(message) {
     comment ? `Comentario a resolver: ${comment.chapter}. ${comment.comment}` : "",
     urgentTask ? `Tarea que conviene dejar cerrada: ${urgentTask.title}.` : "",
     "Decisión que debe salir de la reunión: siguiente entregable y criterio de cierre."
-  ].filter(Boolean);
+  ].filter(Boolean).slice(0, style.meetingMode === "brief" ? 3 : 5);
   const taskLines = [
     comment ? `Responder comentario de ${comment.chapter}` : "",
     chapter ? `Empujar ${chapter.title}` : "",
@@ -4012,17 +4335,26 @@ function prepareCommentResponseFromPrompt(message) {
 }
 
 function buildCommentResponseDraft(comment, chapter) {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const focusSection = chapter ? findWeakestSection(chapter) : null;
-  const lines = [
-    `- Qué voy a corregir: ${comment.comment}`,
-    focusSection
-      ? `- Dónde tocar primero: ${chapter.title}, especialmente en "${focusSection.title}".`
-      : `- Dónde tocar primero: el apartado de ${comment.chapter} directamente afectado por el comentario.`,
-    chapter?.argument
-      ? `- Criterio de respuesta: reforzar el texto para que el argumento central quede explícito (${chapter.argument}).`
-      : "- Criterio de respuesta: dejar visible el cambio textual y la justificación académica del ajuste.",
-    "- Señal de cierre: el comentario solo pasa a resuelto cuando el cambio quede escrito y verificable, no solo pensado."
-  ];
+  const lines = style.planningDepth === "detailed"
+    ? [
+        `- Qué voy a corregir: ${comment.comment}`,
+        focusSection
+          ? `- Dónde tocar primero: ${chapter.title}, especialmente en "${focusSection.title}".`
+          : `- Dónde tocar primero: el apartado de ${comment.chapter} directamente afectado por el comentario.`,
+        chapter?.argument
+          ? `- Criterio de respuesta: reforzar el texto para que el argumento central quede explícito (${chapter.argument}).`
+          : "- Criterio de respuesta: dejar visible el cambio textual y la justificación académica del ajuste.",
+        "- Evidencia de cierre: el cambio tiene que quedar escrito y verificable antes de marcar el comentario como resuelto."
+      ]
+    : [
+        `- Qué voy a corregir: ${comment.comment}`,
+        focusSection
+          ? `- Dónde tocar primero: ${chapter.title}, especialmente en "${focusSection.title}".`
+          : `- Dónde tocar primero: el apartado de ${comment.chapter} directamente afectado por el comentario.`,
+        "- Señal de cierre: dejar el cambio escrito, no solo pensado."
+      ];
   return lines.join("\n");
 }
 
@@ -4046,6 +4378,7 @@ function findMeetingFromPrompt(message) {
 }
 
 function buildMeetingAdvice() {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const nextMeeting = upcomingMeeting();
   const chapter = nextChapterToPush();
   const urgentComment = [...state.reviewComments].find((comment) => comment.status !== "Resuelto");
@@ -4057,7 +4390,7 @@ function buildMeetingAdvice() {
     "- Una decisión que necesitas cerrar, no solo avances.",
     urgentComment ? `- Respuesta propuesta al comentario abierto de ${urgentComment.chapter}.` : "- Una lista corta de bloqueos concretos.",
     "- Próximo entregable con fecha realista."
-  ];
+  ].slice(0, style.meetingMode === "brief" ? 3 : 4);
   return `Para la reunión de ${formatMeetingLabel(nextMeeting)} yo llevaría esto:
 ${lines.join("\n")}`;
 }

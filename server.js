@@ -1062,6 +1062,7 @@ function normalizeAssistantState(state) {
   next.reviewComments = Array.isArray(next.reviewComments) ? next.reviewComments : [];
   next.writingLog = Array.isArray(next.writingLog) ? next.writingLog : [];
   next.assistantThread = Array.isArray(next.assistantThread) ? next.assistantThread : [];
+  next.assistantStyleMemory = next.assistantStyleMemory && typeof next.assistantStyleMemory === "object" ? next.assistantStyleMemory : {};
   return next;
 }
 
@@ -1149,6 +1150,7 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "No inventes fechas, horas ni datos que no aparezcan o no se deduzcan claramente.",
     "Si falta un dato minimo para ejecutar una accion, pide solo ese dato.",
     "Si usas herramientas, guarda primero y después confirma exactamente qué has creado y dónde queda guardado.",
+    "Ajusta el tono, el número de frentes, la profundidad del plan y la preparación de reuniones según la memoria de estilo del usuario, salvo que el usuario pida otra cosa en este mensaje.",
     "Si no hace falta herramienta, responde con consejo accionable y concreto.",
     "Usuario actual: " + user.name + " (" + user.email + ")",
     "Resumen operativo actual: " + JSON.stringify(operations),
@@ -1213,7 +1215,12 @@ function buildAssistantContext(state) {
       last7DaysWords: wordsWrittenLastDays(state.writingLog, 7),
       sessionsLast7Days: sessionsLastDays(state.writingLog, 7)
     },
-    analytics: buildAssistantAnalytics(state)
+    analytics: buildAssistantAnalytics(state),
+    styleMemory: {
+      summary: state.assistantStyleMemory && state.assistantStyleMemory.summary || "",
+      explicit: state.assistantStyleMemory && state.assistantStyleMemory.explicit || {},
+      learned: state.assistantStyleMemory && state.assistantStyleMemory.learned || {}
+    }
   };
 }
 
@@ -1227,6 +1234,7 @@ function sanitizeAssistantClientMeta(value) {
     lastExportedAt: String(input.lastExportedAt || "").trim(),
     lastRestoredAt: String(input.lastRestoredAt || "").trim(),
     snapshotCount: Number.isFinite(Number(input.snapshotCount)) ? Number(input.snapshotCount) : 0,
+    styleSummary: String(input.styleSummary || "").trim(),
     demoMode: Boolean(input.demoMode)
   };
 }
