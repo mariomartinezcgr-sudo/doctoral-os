@@ -1463,8 +1463,10 @@ function mergeGoogleCalendarMeetings(existingMeetings, importedMeetings) {
       ...current,
       ...imported,
       id: current.id || imported.id,
+      summary: current.summary || "",
       decisions: current.decisions || "",
       tasks: current.tasks || "",
+      notes: current.notes || "",
       next: current.next || ""
     };
     updatedCount += 1;
@@ -1503,8 +1505,10 @@ function mapGoogleCalendarEventToMeeting(event) {
     type: inferServerMeetingType(attendees, agenda),
     attendees,
     agenda,
+    summary: "",
     decisions: "",
     tasks: "",
+    notes: "",
     next: ""
   };
 }
@@ -1762,6 +1766,7 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "Cuando el usuario pida un plan, conviértelo en pasos cerrables de 20 a 45 minutos.",
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
     "Si el usuario te pide preparar una reunión, guarda una agenda útil dentro de la reunión adecuada.",
+    "Si el usuario te pide cerrar una reunión a partir de notas, guarda resumen, decisiones y tareas dentro de esa reunión.",
     "Si el usuario te pide responder a un comentario, guarda una respuesta de trabajo dentro del comentario correspondiente.",
     "Si el usuario trabaja un capítulo concreto, puedes detectar la sección más floja, convertir un comentario en checklist de reescritura, proponer estructura de un apartado y preparar la siguiente sesión.",
     "Si el usuario te pide plan semanal, puedes crear hasta tres tareas concretas usando varias llamadas de herramienta.",
@@ -1826,11 +1831,18 @@ function buildAssistantContext(state) {
       impact: task.impact || ""
     })),
     meetings: state.meetings.slice(0, 8).map((meeting) => ({
+      id: meeting.id || "",
       date: meeting.date || "",
       time: meeting.time || "",
       type: meeting.type || "",
       attendees: meeting.attendees || "",
-      agenda: meeting.agenda || ""
+      agenda: meeting.agenda || "",
+      summary: meeting.summary || "",
+      decisions: meeting.decisions || "",
+      tasks: meeting.tasks || "",
+      notes: meeting.notes || "",
+      next: meeting.next || "",
+      provider: meeting.provider || ""
     })),
     reviewComments: state.reviewComments.slice(0, 10).map((comment) => ({
       id: comment.id || "",
@@ -2007,6 +2019,25 @@ function assistantTools() {
     },
     {
       type: "function",
+      name: "update_meeting_closure",
+      description: "Guarda el cierre de una reunión ya existente a partir de notas rápidas, con resumen, decisiones y tareas.",
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          date: { type: "string", description: "Fecha de la reunión YYYY-MM-DD o cadena vacía para usar la reunión más adecuada del contexto." },
+          time: { type: "string", description: "Hora HH:MM o cadena vacía si no hace falta distinguirla." },
+          summary: { type: "string", description: "Resumen ejecutivo de la reunión en dos o tres frases cortas." },
+          decisions: { type: "string", description: "Decisiones cerradas o criterios acordados, en varias líneas si hace falta." },
+          tasks: { type: "string", description: "Tareas o siguientes pasos concretos, en varias líneas si hace falta." },
+          next: { type: "string", description: "Próxima fecha relevante YYYY-MM-DD o cadena vacía si no se deduce." }
+        },
+        required: ["date", "time", "summary", "decisions", "tasks", "next"]
+      }
+    },
+    {
+      type: "function",
       name: "update_review_comment_response",
       description: "Guarda una respuesta de trabajo dentro de un comentario de revisión abierto.",
       strict: true,
@@ -2137,8 +2168,10 @@ function executeAssistantTool(state, call, pendingActions = []) {
       type: String(args.type || "Dirección").trim() || "Dirección",
       attendees: String(args.attendees || "").trim(),
       agenda: String(args.agenda || "Seguimiento de tesis").trim() || "Seguimiento de tesis",
+      summary: "",
       decisions: "",
       tasks: "",
+      notes: "",
       next: ""
     };
     state.meetings.unshift(meeting);
@@ -2212,6 +2245,46 @@ function executeAssistantTool(state, call, pendingActions = []) {
         time: meeting.time || "",
         type: meeting.type || "",
         agenda: meeting.agenda || "",
+        tasks: meeting.tasks || "",
+        next: meeting.next || ""
+      }
+    };
+  }
+
+  if (call.name === "update_meeting_closure") {
+    const date = normalizeIsoDate(args.date);
+    const time = normalizeTime(args.time);
+    const meeting = findAssistantMeeting(state.meetings, date, time);
+    if (!meeting) return { ok: false, error: "No he encontrado la reunión que quieres cerrar." };
+
+    const summary = String(args.summary || "").trim();
+    const decisions = String(args.decisions || "").trim() || String(meeting.decisions || "").trim();
+    const tasks = String(args.tasks || "").trim() || String(meeting.tasks || "").trim();
+    if (!summary) return { ok: false, error: "El cierre necesita un resumen breve." };
+
+    meeting.summary = summary;
+    meeting.decisions = decisions;
+    meeting.tasks = tasks;
+    meeting.next = normalizeIsoDate(args.next) || meeting.next || "";
+    pushPendingAssistantAction(pendingActions, {
+      type: "update_meeting_closure",
+      meetingId: meeting.id || "",
+      meetingLabel: [meeting.date, meeting.time, meeting.type].filter(Boolean).join(" · "),
+      date: meeting.date || "",
+      time: meeting.time || "",
+      summary: meeting.summary || "",
+      decisions: meeting.decisions || "",
+      tasks: meeting.tasks || "",
+      next: meeting.next || ""
+    });
+    return {
+      ok: true,
+      meeting: {
+        date: meeting.date || "",
+        time: meeting.time || "",
+        type: meeting.type || "",
+        summary: meeting.summary || "",
+        decisions: meeting.decisions || "",
         tasks: meeting.tasks || "",
         next: meeting.next || ""
       }

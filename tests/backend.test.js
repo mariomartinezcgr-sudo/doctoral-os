@@ -351,6 +351,37 @@ async function main() {
       assert.equal(me.body.state.tasks.length, 0);
       assert.ok(Array.isArray(me.body.state.assistantThread));
       assert.ok(me.body.state.assistantThread.some((message) => String(message.text || "").toLowerCase().includes("vista previa")));
+
+      const closureState = {
+        project: { name: "Tesis IA", candidate: "Assistant Preview" },
+        meetings: [
+          {
+            id: "mt-1",
+            date: "2026-05-11",
+            time: "10:30",
+            type: "Dirección",
+            attendees: "Directora",
+            agenda: "Reunion doctorado",
+            summary: "",
+            decisions: "",
+            tasks: "",
+            notes: "Revisar muestra y justificar mejor los criterios.\nDecisión: cerrar una versión más explícita del apartado 2.2.\nTareas: reescribir 2.2 y enviar borrador el 2026-05-13.",
+            next: ""
+          }
+        ]
+      };
+
+      const meetingClosure = await request("/api/assistant", {
+        method: "POST",
+        cookie: register.cookie,
+        body: { message: "Cierra la reunión del 2026-05-11 a las 10:30 y deja resumen, decisiones y tareas", state: closureState }
+      });
+      assert.equal(meetingClosure.status, 200);
+      assert.equal(meetingClosure.body.mode, "openai");
+      assert.ok(meetingClosure.body.pendingAction);
+      assert.equal(meetingClosure.body.pendingAction.actions[0].type, "update_meeting_closure");
+      assert.equal(meetingClosure.body.state.meetings[0].summary, "");
+      assert.ok(String(meetingClosure.body.reply).toLowerCase().includes("vista previa"));
     });
   });
 
@@ -521,32 +552,58 @@ async function withMockOpenAI(port, run) {
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     requests.push(body);
     const isToolReturn = Boolean(body.previous_response_id);
+    const lastInput = Array.isArray(body.input) ? body.input[body.input.length - 1] : null;
+    const messageText = typeof lastInput?.content === "string"
+      ? lastInput.content
+      : Array.isArray(lastInput?.content)
+        ? lastInput.content.map((item) => String(item?.text || item || "")).join(" ")
+        : "";
+    const normalizedMessage = String(messageText || "").toLowerCase();
     const payload = isToolReturn
       ? {
           id: "resp-2",
           model: "gpt-5.4-mini",
-          output_text: "Te dejo una vista previa para crear la tarea y que la confirmes.",
+          output_text: normalizedMessage.includes("cierra la reunión") || normalizedMessage.includes("cierra la reunion")
+            ? "Te dejo una vista previa para cerrar la reunión y que la confirmes."
+            : "Te dejo una vista previa para crear la tarea y que la confirmes.",
           output: []
         }
       : {
           id: "resp-1",
           model: "gpt-5.4-mini",
-          output: [
-            {
-              type: "function_call",
-              id: "call-1",
-              call_id: "call-1",
-              name: "create_task",
-              arguments: JSON.stringify({
-                title: "Enviar borrador del capítulo 1",
-                due: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
-                area: "Capítulos",
-                status: "week",
-                effort: "45 min",
-                impact: "Alto"
-              })
-            }
-          ]
+          output: normalizedMessage.includes("cierra la reunión") || normalizedMessage.includes("cierra la reunion")
+            ? [
+                {
+                  type: "function_call",
+                  id: "call-1",
+                  call_id: "call-1",
+                  name: "update_meeting_closure",
+                  arguments: JSON.stringify({
+                    date: "2026-05-11",
+                    time: "10:30",
+                    summary: "Se cerró una versión más clara del foco metodológico y quedó definido el siguiente entregable.",
+                    decisions: "Justificar mejor los criterios de muestra.\nCerrar una versión más explícita del apartado 2.2.",
+                    tasks: "Reescribir 2.2.\nEnviar borrador el 2026-05-13.",
+                    next: "2026-05-13"
+                  })
+                }
+              ]
+            : [
+                {
+                  type: "function_call",
+                  id: "call-1",
+                  call_id: "call-1",
+                  name: "create_task",
+                  arguments: JSON.stringify({
+                    title: "Enviar borrador del capítulo 1",
+                    due: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+                    area: "Capítulos",
+                    status: "week",
+                    effort: "45 min",
+                    impact: "Alto"
+                  })
+                }
+              ]
         };
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));

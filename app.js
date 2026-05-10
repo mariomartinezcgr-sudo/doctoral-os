@@ -499,11 +499,7 @@ function ensureStateShape(target) {
   target.onboarding = normalizeOnboardingState(target.onboarding, target.project?.candidate);
   target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
   target.literatureCitationStyle = ["APA 7", "MLA 9", "Chicago", "BibTeX"].includes(target.literatureCitationStyle) ? target.literatureCitationStyle : "APA 7";
-  target.meetings.forEach((meeting) => {
-    meeting.time = meeting.time || "";
-    if (meeting.type === "Direccion") meeting.type = "Dirección";
-    if (meeting.type === "Revision interna") meeting.type = "Revisión interna";
-  });
+  target.meetings = target.meetings.map((meeting) => normalizeMeetingRecord(meeting));
   target.readings.forEach((reading) => {
     if (reading.status === "Leido") reading.status = "Leído";
     if (reading.chapter === "Sin capitulo") reading.chapter = "Sin capítulo";
@@ -567,6 +563,24 @@ function ensureStateShape(target) {
   }
   refreshAssistantStyleMemory(target);
   return target;
+}
+
+function normalizeMeetingRecord(meeting) {
+  const next = meeting && typeof meeting === "object" ? meeting : {};
+  next.id = next.id || createId("mt");
+  next.date = next.date || "";
+  next.time = next.time || "";
+  next.type = next.type || "Dirección";
+  next.attendees = next.attendees || "";
+  next.agenda = next.agenda || "";
+  next.summary = next.summary || "";
+  next.decisions = next.decisions || "";
+  next.tasks = next.tasks || "";
+  next.notes = next.notes || "";
+  next.next = next.next || "";
+  if (next.type === "Direccion") next.type = "Dirección";
+  if (next.type === "Revision interna") next.type = "Revisión interna";
+  return next;
 }
 
 function createFreshState(user = {}) {
@@ -777,8 +791,8 @@ function createDemoState() {
       { id: createId("tk"), title: "Vincular tres lecturas clave al capítulo metodológico", area: "Lecturas", status: "later", due: demoDateOffset(11), effort: "60 min", impact: "Medio" }
     ],
     meetings: [
-      { id: createId("mt"), date: demoDateOffset(3), time: "16:00", type: "Dirección", attendees: "Directora", agenda: "Método y criterios de muestreo", decisions: "Llegar con una justificación más explícita del tamaño de muestra y una tabla final de participantes.", tasks: "Reescribir apartado 2.2 y llevar una agenda de 5 puntos.", next: demoDateOffset(17) },
-      { id: createId("mt"), date: demoDateOffset(-5), time: "11:30", type: "Dirección", attendees: "Directora", agenda: "Revisión del marco teórico", decisions: "Reducir repetición conceptual y cerrar mejor el paso a metodología.", tasks: "Ajustar secciones 2.2 y 2.3; preparar transición a capítulo 3.", next: demoDateOffset(3) }
+      { id: createId("mt"), date: demoDateOffset(3), time: "16:00", type: "Dirección", attendees: "Directora", agenda: "Método y criterios de muestreo", summary: "La próxima reunión ya está enfocada en justificar mejor la muestra y dejar claro el siguiente entregable metodológico.", decisions: "Llegar con una justificación más explícita del tamaño de muestra y una tabla final de participantes.", tasks: "Reescribir apartado 2.2 y llevar una agenda de 5 puntos.", notes: "Conviene entrar con una versión más defendible de la muestra.\nLlevar tabla final de participantes.\nPreparar agenda breve para no dispersar la reunión.", next: demoDateOffset(17) },
+      { id: createId("mt"), date: demoDateOffset(-5), time: "11:30", type: "Dirección", attendees: "Directora", agenda: "Revisión del marco teórico", summary: "Se cerró que el marco teórico necesita menos repetición y una mejor transición hacia metodología antes del siguiente envío.", decisions: "Reducir repetición conceptual y cerrar mejor el paso a metodología.", tasks: "Ajustar secciones 2.2 y 2.3; preparar transición a capítulo 3.", notes: "La directora ve repetición entre autorregulación y seguimiento.\nDecisión: limpiar redundancias y reforzar el puente hacia metodología.\nTareas: ajustar 2.2 y 2.3, preparar transición al capítulo 3.", next: demoDateOffset(3) }
     ],
     reviewComments: [
       { id: createId("rv"), chapter: chapter3.title, source: "Dirección", comment: "Falta justificar el tamaño de muestra y explicar por qué 18 casos son suficientes.", response: "Añadir criterio de saturación y justificar heterogeneidad de perfiles.", status: "Pendiente", priority: "Alta", due: demoDateOffset(2) },
@@ -1715,8 +1729,10 @@ function completeOnboarding() {
       type: inferMeetingType(data.meetingWith, data.meetingTopic),
       attendees: data.meetingWith || "",
       agenda: data.meetingTopic || "Seguimiento inicial de tesis",
+      summary: "",
       decisions: "",
       tasks: "",
+      notes: "",
       next: ""
     });
   }
@@ -2161,6 +2177,25 @@ function handleScreenClick(event) {
     return;
   }
 
+  if (action === "save-meeting-notes") {
+    const meeting = state.meetings.find((item) => item.id === id);
+    if (!meeting) return;
+    saveState("Notas de reunión guardadas");
+    render();
+    return;
+  }
+
+  if (action === "meeting-autoclose") {
+    const meeting = state.meetings.find((item) => item.id === id);
+    if (!meeting) return;
+    if (!meetingHasClosureSource(meeting)) {
+      showToast("Añade primero unas notas rápidas o acuerdos de salida");
+      return;
+    }
+    submitAssistantPrompt(`Cierra la reunión del ${meeting.date}${meeting.time ? ` a las ${meeting.time}` : ""} y deja resumen, decisiones y tareas a partir de sus notas.`);
+    return;
+  }
+
   if (action === "analytics-range") {
     state.analyticsRange = target.dataset.value === "day" ? "day" : "week";
     saveState("", { skipSync: true });
@@ -2472,8 +2507,10 @@ function handleFormSubmit(event) {
       type: data.type || "Dirección",
       attendees: data.attendees || "",
       agenda: data.agenda || "",
+      summary: "",
       decisions: data.decisions || "",
       tasks: data.tasks || "",
+      notes: "",
       next: data.next || ""
     });
     saveState("Reunión guardada");
@@ -2531,6 +2568,12 @@ function handleFormSubmit(event) {
 }
 
 function handleScreenInput(event) {
+  if (event.target.matches("[data-meeting-notes]")) {
+    const meeting = state.meetings.find((item) => item.id === event.target.dataset.id);
+    if (meeting) meeting.notes = event.target.value;
+    return;
+  }
+
   if (event.target.matches("[data-literature-filter]")) {
     const cursor = event.target.selectionStart;
     state.literatureFilter = event.target.value;
@@ -3665,6 +3708,7 @@ function renderReviews() {
                 <a class="tiny-button" href="${escapeAttribute(latest.meetLink)}" target="_blank" rel="noreferrer">Abrir Meet</a>
               </div>
             ` : ""}
+            ${latest.summary ? `<p><strong>Resumen:</strong> ${escapeHtml(latest.summary)}</p>` : ""}
             <p><strong>Decisiones:</strong> ${escapeHtml(latest.decisions)}</p>
             <p><strong>Tareas:</strong> ${escapeHtml(latest.tasks)}</p>
             <div class="generated-box">${escapeHtml(generateMeetingEmail(latest))}</div>
@@ -3701,8 +3745,17 @@ function renderReviews() {
               </div>
               ${meeting.provider === "google_meet" ? `<div class="integration-inline-row"><span class="badge teal">Google Meet</span><span class="muted">Sincronizada ${meeting.syncedAt ? formatDateTime(meeting.syncedAt) : "ahora"}</span></div>` : ""}
               <p><strong>Agenda:</strong> ${escapeHtml(meeting.agenda)}</p>
+              ${meeting.summary ? `<p><strong>Resumen:</strong> ${escapeHtml(meeting.summary)}</p>` : ""}
               <p><strong>Decisiones:</strong> ${escapeHtml(meeting.decisions)}</p>
               <p><strong>Tareas:</strong> ${escapeHtml(meeting.tasks)}</p>
+              <label class="field">
+                <span>Notas rápidas de salida</span>
+                <textarea data-meeting-notes data-id="${meeting.id}" rows="5" placeholder="Pega aquí notas, acuerdos sueltos o tareas habladas para que TeDoc cierre la reunión automáticamente.">${escapeHtml(meeting.notes || "")}</textarea>
+              </label>
+              <div class="summary-actions">
+                <button class="tiny-button" data-action="save-meeting-notes" data-id="${meeting.id}" type="button">Guardar notas</button>
+                <button class="ghost-button" data-action="meeting-autoclose" data-id="${meeting.id}" type="button" ${meetingHasClosureSource(meeting) ? "" : "disabled"}><span data-icon="assistant"></span>TeDoc cierra reunión</button>
+              </div>
             </article>
           `).join("") || ""}
         </section>
@@ -4238,6 +4291,7 @@ function buildAssistantActionSummary(actions) {
   if (counts.get("create_task")) pieces.push(`crear ${counts.get("create_task")} tarea${counts.get("create_task") === 1 ? "" : "s"}`);
   if (counts.get("create_meeting")) pieces.push(`agendar ${counts.get("create_meeting")} reunión${counts.get("create_meeting") === 1 ? "" : "es"}`);
   if (counts.get("update_meeting_brief")) pieces.push(`preparar ${counts.get("update_meeting_brief")} agenda${counts.get("update_meeting_brief") === 1 ? "" : "s"} de reunión`);
+  if (counts.get("update_meeting_closure")) pieces.push(`cerrar ${counts.get("update_meeting_closure")} reunión${counts.get("update_meeting_closure") === 1 ? "" : "es"} con resumen y tareas`);
   if (counts.get("update_review_comment_response")) pieces.push(`actualizar ${counts.get("update_review_comment_response")} comentario${counts.get("update_review_comment_response") === 1 ? "" : "s"}`);
   if (counts.get("convert_review_comment_to_task")) pieces.push(`convertir ${counts.get("convert_review_comment_to_task")} comentario${counts.get("convert_review_comment_to_task") === 1 ? "" : "s"} en tarea`);
   if (counts.get("create_review_comment")) pieces.push(`registrar ${counts.get("create_review_comment")} comentario${counts.get("create_review_comment") === 1 ? "" : "s"}`);
@@ -4265,6 +4319,9 @@ function describeAssistantAction(action) {
   }
   if (action.type === "update_meeting_brief") {
     return `Actualizar la agenda de ${action.meetingLabel || "la reunión"} con próximos puntos y tareas.`;
+  }
+  if (action.type === "update_meeting_closure") {
+    return `Cerrar ${action.meetingLabel || "la reunión"} con resumen, decisiones y tareas a partir de sus notas.`;
   }
   if (action.type === "update_review_comment_response") {
     return `Guardar respuesta de trabajo para el comentario de ${action.chapterTitle || "un capítulo"}.`;
@@ -4349,8 +4406,10 @@ function applyAssistantAction(action) {
       type: meeting.type || "Dirección",
       attendees: meeting.attendees || "",
       agenda: meeting.agenda || "",
+      summary: meeting.summary || "",
       decisions: meeting.decisions || "",
       tasks: meeting.tasks || "",
+      notes: meeting.notes || "",
       next: meeting.next || ""
     });
     return;
@@ -4360,6 +4419,16 @@ function applyAssistantAction(action) {
     const meeting = findMeetingByAction(action);
     if (!meeting) return;
     meeting.agenda = action.agenda || meeting.agenda || "";
+    meeting.tasks = action.tasks || meeting.tasks || "";
+    meeting.next = action.next || meeting.next || "";
+    return;
+  }
+
+  if (action.type === "update_meeting_closure") {
+    const meeting = findMeetingByAction(action);
+    if (!meeting) return;
+    meeting.summary = action.summary || meeting.summary || "";
+    meeting.decisions = action.decisions || meeting.decisions || "";
     meeting.tasks = action.tasks || meeting.tasks || "";
     meeting.next = action.next || meeting.next || "";
     return;
@@ -4673,6 +4742,7 @@ function buildAssistantReply(message) {
   if (isRiskRequest(normalized)) return { reply: buildRiskRadar() };
   if (isWarmStartRequest(normalized)) return { reply: buildWarmStartPlan() };
   if (isSafetyRequest(normalized)) return { reply: buildSafetyReply() };
+  if (isMeetingClosureRequest(normalized)) return prepareMeetingClosureFromPrompt(message);
   if (isMeetingPreparationRequest(normalized)) return prepareMeetingBriefFromPrompt(message);
   if (isCommentResponseRequest(normalized)) return prepareCommentResponseFromPrompt(message);
   if (isCommentToTaskRequest(normalized)) return convertCommentToTaskFromPrompt(message);
@@ -4788,6 +4858,18 @@ function isMeetingPreparationRequest(normalized) {
   return normalized.includes("reunion")
     && (normalized.includes("preparame") || normalized.includes("prepara") || normalized.includes("guarda agenda") || normalized.includes("deja agenda") || normalized.includes("agenda para"))
     && !isMeetingCreationRequest(normalized);
+}
+
+function isMeetingClosureRequest(normalized) {
+  return normalized.includes("reunion")
+    && (
+      normalized.includes("cierra")
+      || normalized.includes("cerrar")
+      || normalized.includes("cierre")
+      || normalized.includes("resumen")
+      || normalized.includes("decisiones")
+    )
+    && normalized.includes("tareas");
 }
 
 function isCommentResponseRequest(normalized) {
@@ -5092,6 +5174,36 @@ function taskExists(title) {
   return state.tasks.some((task) => normalizeUserText(task.title) === normalizedTitle);
 }
 
+function prepareMeetingClosureFromPrompt(message) {
+  const meeting = findMeetingForClosureFromPrompt(message);
+  if (!meeting) {
+    return { reply: "No encuentro una reunión adecuada para cerrar. Si quieres, dime la fecha exacta o registra primero esa reunión." };
+  }
+  if (!meetingHasClosureSource(meeting)) {
+    return { reply: `Puedo cerrar ${formatMeetingLabel(meeting)}, pero necesito unas notas rápidas de salida, acuerdos o tareas habladas dentro de la reunión.` };
+  }
+
+  const closure = buildMeetingClosureDraft(meeting);
+  return assistantReplyWithPreview(
+    `Te dejo una vista previa de cierre para ${formatMeetingLabel(meeting)}.\n\nResumen:\n${closure.summary}\n\nDecisiones:\n${bulletizeText(closure.decisions)}\n\nTareas:\n${bulletizeText(closure.tasks)}\n\nSi la confirmas, la dejo guardada dentro de la reunión.`,
+    [{
+      type: "update_meeting_closure",
+      meetingId: meeting.id,
+      meetingLabel: formatMeetingLabel(meeting),
+      date: meeting.date,
+      time: meeting.time,
+      summary: closure.summary,
+      decisions: closure.decisions,
+      tasks: closure.tasks,
+      next: closure.next
+    }],
+    {
+      summary: `Voy a cerrar ${formatMeetingLabel(meeting)} con resumen, decisiones y tareas.`,
+      toastMessage: "Cierre de reunión guardado desde TeDoc"
+    }
+  );
+}
+
 function prepareMeetingBriefFromPrompt(message) {
   const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
   const meeting = findMeetingFromPrompt(message);
@@ -5134,6 +5246,129 @@ function prepareMeetingBriefFromPrompt(message) {
       toastMessage: "Agenda guardada desde TeDoc"
     }
   );
+}
+
+function findMeetingForClosureFromPrompt(message) {
+  const date = extractDateFromText(message);
+  const time = extractTimeFromText(message);
+  if (date) {
+    return [...state.meetings]
+      .sort((a, b) => `${b.date || ""} ${b.time || "00:00"}`.localeCompare(`${a.date || ""} ${a.time || "00:00"}`))
+      .find((meeting) => meeting.date === date && (!time || meeting.time === time))
+      || null;
+  }
+
+  return [...state.meetings]
+    .sort((a, b) => `${b.date || ""} ${b.time || "00:00"}`.localeCompare(`${a.date || ""} ${a.time || "00:00"}`))
+    .find((meeting) => meetingHasClosureSource(meeting))
+    || [...state.meetings]
+      .sort((a, b) => `${b.date || ""} ${b.time || "00:00"}`.localeCompare(`${a.date || ""} ${a.time || "00:00"}`))[0]
+    || null;
+}
+
+function meetingHasClosureSource(meeting) {
+  return Boolean(String(buildMeetingClosureSource(meeting)).trim());
+}
+
+function buildMeetingClosureSource(meeting) {
+  return [
+    String(meeting?.notes || "").trim(),
+    String(meeting?.decisions || "").trim(),
+    String(meeting?.tasks || "").trim(),
+    String(meeting?.agenda || "").trim()
+  ].filter(Boolean).join("\n");
+}
+
+function buildMeetingClosureDraft(meeting) {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
+  const topic = meetingPrimaryTopic(meeting);
+  const source = buildMeetingClosureSource(meeting);
+  const sections = parseMeetingNotesSections(source);
+  const baseLines = [...sections.summary, ...sections.general].filter(Boolean);
+  const summary = buildMeetingSummaryText(meeting, baseLines, topic, style);
+  const decisionLines = (sections.decisions.length ? sections.decisions : inferMeetingDecisionLines(baseLines, topic)).slice(0, style.meetingMode === "brief" ? 2 : 4);
+  const taskLines = (sections.tasks.length ? sections.tasks : inferMeetingTaskLines(baseLines, topic)).slice(0, style.meetingMode === "brief" ? 2 : 4);
+  const next = extractDateFromText(meeting.notes || "") || meeting.next || "";
+  return {
+    summary,
+    decisions: decisionLines.join("\n"),
+    tasks: taskLines.join("\n"),
+    next
+  };
+}
+
+function parseMeetingNotesSections(text) {
+  const sections = { summary: [], decisions: [], tasks: [], general: [] };
+  let current = "general";
+  splitLines(text).forEach((line) => {
+    const normalized = normalizeUserText(line.replace(/^[-*•\d.)\s]+/, ""));
+    if (/^(resumen|sintesis|síntesis)\b/.test(normalized)) {
+      current = "summary";
+      return;
+    }
+    if (/^(decision|decisiones|acuerdo|acuerdos)\b/.test(normalized)) {
+      current = "decisions";
+      return;
+    }
+    if (/^(tarea|tareas|siguiente paso|proximos pasos|próximos pasos|follow up)\b/.test(normalized)) {
+      current = "tasks";
+      return;
+    }
+    if (/^(agenda|contexto|notas)\b/.test(normalized)) {
+      current = "general";
+      return;
+    }
+    sections[current].push(cleanMeetingNoteLine(line));
+  });
+  return sections;
+}
+
+function cleanMeetingNoteLine(line) {
+  return String(line || "")
+    .replace(/^[-*•]\s*/, "")
+    .replace(/^\d+[.)]\s*/, "")
+    .trim();
+}
+
+function buildMeetingSummaryText(meeting, lines, topic, style) {
+  const trimmed = lines.filter(Boolean).slice(0, style.meetingMode === "brief" ? 1 : 2);
+  const attendees = String(meeting.attendees || "").trim();
+  if (trimmed.length) {
+    const intro = `Se revisó ${topic}${attendees ? ` con ${attendees}` : ""}.`;
+    const body = trimmed.map((line) => ensureSentence(line)).join(" ");
+    return `${intro} ${body}`.trim();
+  }
+  return `Se revisó ${topic}${attendees ? ` con ${attendees}` : ""} y quedó definido un siguiente paso operativo para no perder continuidad.`;
+}
+
+function inferMeetingDecisionLines(lines, topic) {
+  const matched = lines.filter((line) => /(decid|acord|queda|quedo|quedó|priorizar|enfoque|se mantiene|se cambia|se cierra|se enviara|se enviará)/i.test(normalizeUserText(line)));
+  if (matched.length) return matched.map((line) => ensureSentence(line));
+  const first = lines[0] ? ensureSentence(lines[0]) : "";
+  return [first || `Queda como foco inmediato ${topic}.`];
+}
+
+function inferMeetingTaskLines(lines, topic) {
+  const matched = lines.filter((line) => /(enviar|revisar|cerrar|preparar|reescribir|actualizar|hacer|redactar|llevar|compartir|subir|ajustar|confirmar|entregar)/i.test(normalizeUserText(line)));
+  if (matched.length) return matched.map((line) => ensureSentence(line));
+  return [`Dejar por escrito el siguiente entregable asociado a ${topic}.`];
+}
+
+function meetingPrimaryTopic(meeting) {
+  const agendaLines = splitLines(meeting?.agenda || "");
+  const first = agendaLines[0] || String(meeting?.agenda || "").trim();
+  return first ? `"${first}"` : "el avance de la tesis";
+}
+
+function bulletizeText(text) {
+  const lines = splitLines(text);
+  return lines.length ? lines.map((line) => `- ${line}`).join("\n") : "- Sin contenido todavía.";
+}
+
+function ensureSentence(text) {
+  const cleaned = cleanMeetingNoteLine(text);
+  if (!cleaned) return "";
+  return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
 }
 
 function prepareCommentResponseFromPrompt(message) {
@@ -5454,8 +5689,10 @@ function createMeetingFromPrompt(message) {
     type,
     attendees,
     agenda,
+    summary: "",
     decisions: "",
     tasks: "",
+    notes: "",
     next: ""
   };
   return assistantReplyWithPreview(
@@ -5968,7 +6205,7 @@ function qualityProgress(chapter) {
 }
 
 function generateMeetingEmail(meeting) {
-  return `Hola,\n\nDejo por escrito el resumen de la reunión del ${formatDate(meeting.date)}.\n\nAgenda:\n${meeting.agenda}\n\nDecisiones tomadas:\n${meeting.decisions}\n\nTareas acordadas:\n${meeting.tasks}\n\nPróxima reunión: ${formatDate(meeting.next)}.\n\nGracias.`;
+  return `Hola,\n\nDejo por escrito el resumen de la reunión del ${formatDate(meeting.date)}.\n\nResumen ejecutivo:\n${meeting.summary || "Pendiente de cerrar con TeDoc o de completar manualmente."}\n\nAgenda:\n${meeting.agenda}\n\nDecisiones tomadas:\n${meeting.decisions}\n\nTareas acordadas:\n${meeting.tasks}\n\nPróxima reunión: ${formatDate(meeting.next)}.\n\nGracias.`;
 }
 
 function generateWritingPlan() {
