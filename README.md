@@ -25,6 +25,24 @@ Para activar el asistente con IA real, define `OPENAI_API_KEY`. Opcionalmente pu
 
 La beta cerrada queda lista para producción: con `NODE_ENV=production` el registro nuevo se puede limitar. Puedes permitir acceso con `BETA_INVITE_CODE` o con una lista de correos en `BETA_ALLOWED_EMAILS` separados por comas.
 
+## Google Calendar y Meet
+
+DoctoralOS ya puede conectarse con Google Calendar para importar reuniones que tengan enlace de Google Meet y registrarlas en `Reuniones y revisión`.
+
+Para activarlo, define estas variables:
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REDIRECT_URI`
+- `GOOGLE_TOKEN_ENCRYPTION_KEY`
+
+La `redirect URI` debe apuntar a:
+
+- local: `http://127.0.0.1:4173/api/integrations/google-calendar/callback`
+- producción: `https://www.doctoralos.com/api/integrations/google-calendar/callback`
+
+El backend guarda los tokens de Google cifrados y solo los usa en servidor para sincronizar eventos de Meet.
+
 ## Recuperación de contraseña por email
 
 DoctoralOS ya incluye flujo de recuperación:

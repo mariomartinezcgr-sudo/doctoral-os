@@ -1045,6 +1045,31 @@ tr:last-child td {
   margin-top: 12px;
 }
 
+.integration-panel {
+  margin-bottom: 18px;
+}
+
+.integration-actions,
+.integration-inline-row,
+.meeting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.integration-actions {
+  margin-top: 12px;
+}
+
+.integration-inline-row {
+  margin: 4px 0 2px;
+}
+
+.meeting-actions {
+  justify-content: flex-end;
+}
+
 .generated-box {
   padding: 14px;
   border: 1px dashed #b4c2ca;

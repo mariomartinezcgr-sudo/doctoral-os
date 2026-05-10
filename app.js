@@ -6,6 +6,7 @@ const SAFETY_META_STORAGE_KEY = "doctoral-os-safety-v1";
 const DEMO_SAFETY_META_STORAGE_KEY = "doctoral-os-demo-safety-v1";
 const DEMO_QUERY_PARAM = "demo";
 const NEXT_QUERY_PARAM = "next";
+const GOOGLE_CALENDAR_QUERY_PARAM = "google_calendar";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
 const MAX_LOCAL_SNAPSHOTS = 6;
 const SNAPSHOT_INTERVAL_MS = 12 * 60 * 1000;
@@ -103,10 +104,12 @@ let state = loadState();
 let safety = loadSafetyMeta();
 let auth = {
   user: null,
+  privateSiteAccess: false,
   status: API_ENABLED ? "checking" : "file",
   lastSync: "",
   statusLabel: API_ENABLED ? "Comprobando" : "Archivo local"
 };
+let googleCalendar = createInitialGoogleCalendarState();
 let syncTimer = null;
 let assistantBusy = false;
 let assistantPendingAction = null;
@@ -204,6 +207,20 @@ function defaultSafetyMeta() {
     lastExportedAt: "",
     lastRestoredAt: "",
     lastSnapshotHash: ""
+  };
+}
+
+function createInitialGoogleCalendarState() {
+  return {
+    loading: false,
+    configured: false,
+    connected: false,
+    googleEmail: "",
+    calendarId: "",
+    updatedAt: "",
+    message: API_ENABLED
+      ? "Conecta Google Calendar para importar reuniones de Google Meet."
+      : "Esta integración necesita abrir la app desde el servidor."
   };
 }
 
@@ -1070,7 +1087,16 @@ function nextRedirectPath() {
 function consumePostLoginRedirect() {
   const destination = nextRedirectPath();
   if (!destination) return false;
+  const wantsPrivatePreview = destination === "/preview" || destination.startsWith("/preview?");
   const current = window.location.pathname + window.location.search + window.location.hash;
+  if (auth.user && wantsPrivatePreview && auth.privateSiteAccess === false) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(NEXT_QUERY_PARAM);
+    url.searchParams.delete("auth");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    showToast("Esta cuenta no tiene acceso privado con este email");
+    return false;
+  }
   if (destination === window.location.pathname) {
     const url = new URL(window.location.href);
     url.searchParams.delete(NEXT_QUERY_PARAM);
@@ -1081,6 +1107,161 @@ function consumePostLoginRedirect() {
   if (destination === current) return false;
   window.location.assign(destination);
   return true;
+}
+
+function clearGoogleCalendarQueryParam() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(GOOGLE_CALENDAR_QUERY_PARAM);
+  window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+}
+
+function consumeGoogleCalendarQueryResult() {
+  const url = new URL(window.location.href);
+  const status = String(url.searchParams.get(GOOGLE_CALENDAR_QUERY_PARAM) || "").trim();
+  if (!status) return;
+  clearGoogleCalendarQueryParam();
+  if (status === "connected") {
+    showToast("Google Calendar conectado");
+    state.activeView = "reviews";
+    saveState("", { skipSync: true, skipSnapshot: true });
+    render();
+    return;
+  }
+  if (status === "denied") {
+    showToast("Has cancelado la conexión con Google");
+    return;
+  }
+  if (status === "unavailable") {
+    showToast("Falta configurar Google Calendar en el servidor");
+    return;
+  }
+  if (status === "expired") {
+    showToast("La conexión con Google ha caducado. Inténtalo otra vez.");
+    return;
+  }
+  showToast("No se pudo conectar Google Calendar");
+}
+
+async function loadGoogleCalendarStatus() {
+  if (!API_ENABLED || !auth.user) {
+    googleCalendar = createInitialGoogleCalendarState();
+    render();
+    return;
+  }
+
+  googleCalendar = { ...googleCalendar, loading: true };
+  render();
+
+  try {
+    const response = await fetch("/api/integrations/google-calendar/status", { credentials: "same-origin" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "No se pudo cargar Google Calendar");
+    googleCalendar = {
+      ...createInitialGoogleCalendarState(),
+      loading: false,
+      configured: Boolean(result.configured),
+      connected: Boolean(result.connected),
+      googleEmail: String(result.googleEmail || ""),
+      calendarId: String(result.calendarId || ""),
+      updatedAt: String(result.updatedAt || ""),
+      message: String(result.message || "")
+    };
+  } catch (error) {
+    googleCalendar = {
+      ...createInitialGoogleCalendarState(),
+      loading: false,
+      message: error.message || "No se pudo cargar el estado de Google Calendar."
+    };
+  }
+
+  render();
+  consumeGoogleCalendarQueryResult();
+}
+
+function connectGoogleCalendar() {
+  if (!API_ENABLED) {
+    showToast("Abre la app desde el servidor para usar Google Calendar");
+    return;
+  }
+  if (!auth.user) {
+    openAuthModal("login");
+    return;
+  }
+  window.location.assign("/api/integrations/google-calendar/connect");
+}
+
+async function importGoogleCalendarMeetingsFromServer() {
+  if (!API_ENABLED) {
+    showToast("Abre la app desde el servidor para importar reuniones");
+    return;
+  }
+  if (!auth.user) {
+    openAuthModal("login");
+    return;
+  }
+
+  googleCalendar = { ...googleCalendar, loading: true };
+  render();
+
+  try {
+    const response = await fetch("/api/integrations/google-calendar/import", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daysAhead: 30 })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "No se pudieron importar reuniones");
+
+    state = ensureStateShape(deepMerge(structuredClone(defaultState), result.state || {}));
+    googleCalendar = {
+      ...googleCalendar,
+      loading: false,
+      configured: Boolean(result.status?.configured),
+      connected: Boolean(result.status?.connected),
+      googleEmail: String(result.status?.googleEmail || googleCalendar.googleEmail || ""),
+      calendarId: String(result.status?.calendarId || googleCalendar.calendarId || ""),
+      updatedAt: String(result.status?.updatedAt || new Date().toISOString()),
+      message: String(result.status?.message || googleCalendar.message || "")
+    };
+    updateSafetyMeta({ lastRemoteSaveAt: result.savedAt || new Date().toISOString() });
+    saveState("", { skipSync: true, skipSnapshot: true });
+    render();
+    showToast(result.importedCount || result.updatedCount
+      ? `Meet importadas: ${result.importedCount || 0} nuevas, ${result.updatedCount || 0} actualizadas`
+      : "No he encontrado reuniones nuevas de Google Meet");
+  } catch (error) {
+    googleCalendar = { ...googleCalendar, loading: false };
+    render();
+    showToast(error.message || "No se pudieron importar reuniones");
+  }
+}
+
+async function disconnectGoogleCalendar() {
+  if (!API_ENABLED || !auth.user) return;
+  googleCalendar = { ...googleCalendar, loading: true };
+  render();
+
+  try {
+    const response = await fetch("/api/integrations/google-calendar/disconnect", {
+      method: "POST",
+      credentials: "same-origin"
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "No se pudo desconectar Google Calendar");
+    googleCalendar = {
+      ...createInitialGoogleCalendarState(),
+      configured: Boolean(result.status?.configured),
+      connected: false,
+      message: String(result.status?.message || "Google Calendar desconectado.")
+    };
+    render();
+    showToast("Google Calendar desconectado");
+  } catch (error) {
+    googleCalendar = { ...googleCalendar, loading: false };
+    render();
+    showToast(error.message || "No se pudo desconectar Google Calendar");
+  }
 }
 
 function openAuthModal(intent = "login") {
@@ -1690,6 +1871,7 @@ async function handleAuthSubmit(event) {
 
     closeAuthModal();
     form.reset();
+    await loadGoogleCalendarStatus();
     if (consumePostLoginRedirect()) return;
     showToast(mode === "password-reset-confirm" ? "Contraseña actualizada" : "Cuenta sincronizada");
     render();
@@ -1712,7 +1894,8 @@ async function restoreSession() {
     const result = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
-      auth = { user: null, status: "local", lastSync: "", statusLabel: demoMode ? "Demo guiada" : "Local" };
+      auth = { user: null, privateSiteAccess: false, status: "local", lastSync: "", statusLabel: demoMode ? "Demo guiada" : "Local" };
+      googleCalendar = createInitialGoogleCalendarState();
       updateAuthUI();
       return;
     }
@@ -1731,14 +1914,17 @@ async function restoreSession() {
       render();
       launchOnboardingIfNeeded();
     }
+    await loadGoogleCalendarStatus();
   } catch (error) {
-    auth = { ...auth, user: null, status: "offline", lastSync: "", statusLabel: "Backend offline" };
+    auth = { ...auth, user: null, privateSiteAccess: false, status: "offline", lastSync: "", statusLabel: "Backend offline" };
+    googleCalendar = createInitialGoogleCalendarState();
     updateAuthUI();
   }
 }
 
 function applySession(result) {
   auth.user = result.user || null;
+  auth.privateSiteAccess = Boolean(result.user?.privateSiteAccess);
   auth.status = "synced";
   auth.lastSync = shortTime();
   auth.statusLabel = "Sincronizado";
@@ -1758,7 +1944,8 @@ async function logout() {
       // La sesión local se cierra igualmente.
     }
   }
-  auth = { user: null, status: "local", lastSync: "", statusLabel: "Local" };
+  auth = { user: null, privateSiteAccess: false, status: "local", lastSync: "", statusLabel: "Local" };
+  googleCalendar = createInitialGoogleCalendarState();
   updateAuthUI();
   showToast("Sesión cerrada");
 }
@@ -1798,7 +1985,8 @@ async function syncNow(showMessage = true) {
     const result = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
-      auth = { user: null, status: "local", lastSync: "", statusLabel: "Vuelve a entrar" };
+      auth = { user: null, privateSiteAccess: false, status: "local", lastSync: "", statusLabel: "Vuelve a entrar" };
+      googleCalendar = createInitialGoogleCalendarState();
       updateAuthUI();
       if (showMessage) showToast("La sesión ha caducado. Vuelve a entrar.");
       openAuthModal();
@@ -1955,6 +2143,21 @@ function handleScreenClick(event) {
     refreshAssistantStyleMemory(state);
     saveState("Memoria de estilo reiniciada");
     render();
+    return;
+  }
+
+  if (action === "google-calendar-connect") {
+    connectGoogleCalendar();
+    return;
+  }
+
+  if (action === "google-calendar-import") {
+    importGoogleCalendarMeetingsFromServer();
+    return;
+  }
+
+  if (action === "google-calendar-disconnect") {
+    disconnectGoogleCalendar();
     return;
   }
 
@@ -3450,10 +3653,18 @@ function renderReviews() {
           ${metric("Reuniones", state.meetings.length, "actas registradas")}
         </section>
 
+        ${renderGoogleCalendarPanel()}
+
         ${latest ? `
           <article class="panel">
             <p class="card-kicker">Última reunión</p>
             <h2>${escapeHtml(formatMeetingLabel(latest))}</h2>
+            ${latest.provider === "google_meet" && latest.meetLink ? `
+              <div class="integration-inline-row">
+                <span class="badge teal">Google Meet</span>
+                <a class="tiny-button" href="${escapeAttribute(latest.meetLink)}" target="_blank" rel="noreferrer">Abrir Meet</a>
+              </div>
+            ` : ""}
             <p><strong>Decisiones:</strong> ${escapeHtml(latest.decisions)}</p>
             <p><strong>Tareas:</strong> ${escapeHtml(latest.tasks)}</p>
             <div class="generated-box">${escapeHtml(generateMeetingEmail(latest))}</div>
@@ -3483,8 +3694,12 @@ function renderReviews() {
                   <strong>${escapeHtml(formatMeetingLabel(meeting))}</strong>
                   <div class="meeting-meta muted">${escapeHtml(meeting.attendees)} &middot; próxima ${formatDate(meeting.next)}</div>
                 </div>
-                <button class="tiny-button" data-action="delete-meeting" data-id="${meeting.id}" type="button"><span data-icon="trash"></span></button>
+                <div class="meeting-actions">
+                  ${meeting.provider === "google_meet" && meeting.meetLink ? `<a class="tiny-button" href="${escapeAttribute(meeting.meetLink)}" target="_blank" rel="noreferrer">Abrir Meet</a>` : ""}
+                  <button class="tiny-button" data-action="delete-meeting" data-id="${meeting.id}" type="button"><span data-icon="trash"></span></button>
+                </div>
               </div>
+              ${meeting.provider === "google_meet" ? `<div class="integration-inline-row"><span class="badge teal">Google Meet</span><span class="muted">Sincronizada ${meeting.syncedAt ? formatDateTime(meeting.syncedAt) : "ahora"}</span></div>` : ""}
               <p><strong>Agenda:</strong> ${escapeHtml(meeting.agenda)}</p>
               <p><strong>Decisiones:</strong> ${escapeHtml(meeting.decisions)}</p>
               <p><strong>Tareas:</strong> ${escapeHtml(meeting.tasks)}</p>
@@ -3530,6 +3745,44 @@ function renderReviews() {
         </div>
       </aside>
     </section>
+  `;
+}
+
+function renderGoogleCalendarPanel() {
+  const statusBadge = googleCalendar.connected
+    ? `<span class="badge teal">Conectado</span>`
+    : googleCalendar.configured
+      ? `<span class="badge gold">Disponible</span>`
+      : `<span class="badge">Pendiente</span>`;
+
+  const primaryAction = googleCalendar.connected
+    ? `<button class="ghost-button" data-action="google-calendar-import" type="button" ${googleCalendar.loading ? "disabled" : ""}>${googleCalendar.loading ? "Importando..." : "Importar reuniones de Meet"}</button>`
+    : `<button class="button" data-action="google-calendar-connect" type="button" ${googleCalendar.loading || !googleCalendar.configured ? "disabled" : ""}>Conectar Google Calendar</button>`;
+
+  const secondaryAction = googleCalendar.connected
+    ? `<button class="tiny-button" data-action="google-calendar-disconnect" type="button" ${googleCalendar.loading ? "disabled" : ""}>Desconectar</button>`
+    : "";
+
+  const detail = googleCalendar.connected
+    ? `${escapeHtml(googleCalendar.googleEmail || "Cuenta conectada")}${googleCalendar.updatedAt ? ` &middot; última sync ${escapeHtml(formatDateTime(googleCalendar.updatedAt))}` : ""}`
+    : "Trae tus eventos con enlace de Meet y conviértelos en reuniones registradas dentro de la app.";
+
+  return `
+    <article class="panel integration-panel">
+      <div class="section-header">
+        <div>
+          <p class="card-kicker">Google Calendar + Meet</p>
+          <h2>Importa reuniones reales</h2>
+          <p>${escapeHtml(googleCalendar.message)}</p>
+        </div>
+        ${statusBadge}
+      </div>
+      <p class="muted">${detail}</p>
+      <div class="integration-actions">
+        ${primaryAction}
+        ${secondaryAction}
+      </div>
+    </article>
   `;
 }
 

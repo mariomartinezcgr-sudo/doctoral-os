@@ -171,6 +171,21 @@ async function main() {
       body: { email: "owner@example.com", password: "password123", name: "Owner" }
     });
     assert.equal(ownerRegister.status, 201);
+    assert.equal(ownerRegister.body.user.privateSiteAccess, true);
+
+    const outsiderRegister = await request("/api/register", {
+      method: "POST",
+      body: { email: `outsider-${Date.now()}@example.com`, password: "password123", name: "Outsider" }
+    });
+    assert.equal(outsiderRegister.status, 201);
+    assert.equal(outsiderRegister.body.user.privateSiteAccess, false);
+
+    const outsiderMe = await request("/api/me", {
+      method: "GET",
+      cookie: outsiderRegister.cookie
+    });
+    assert.equal(outsiderMe.status, 200);
+    assert.equal(outsiderMe.body.user.privateSiteAccess, false);
 
     const ownerHome = await request("/", {
       method: "GET",
@@ -209,6 +224,93 @@ async function main() {
     });
     assert.equal(ownerApp.status, 200);
     assert.ok(String(ownerApp.body).includes("Sistema doctoral"));
+  });
+
+  await withMockGoogleCalendar(BASE_PORT + 10, async (googleConfig) => {
+    const appPort = BASE_PORT + 4;
+    await withServer(appPort, {
+      NODE_ENV: "test",
+      GOOGLE_CLIENT_ID: "google-client-test",
+      GOOGLE_CLIENT_SECRET: "google-secret-test",
+      GOOGLE_OAUTH_REDIRECT_URI: `http://127.0.0.1:${appPort}/api/integrations/google-calendar/callback`,
+      GOOGLE_TOKEN_ENCRYPTION_KEY: "google-token-encryption-test",
+      GOOGLE_AUTH_URL: googleConfig.authUrl,
+      GOOGLE_TOKEN_URL: googleConfig.tokenUrl,
+      GOOGLE_CALENDAR_BASE_URL: googleConfig.calendarBaseUrl
+    }, async ({ request }) => {
+      const email = `calendar-${Date.now()}@example.com`;
+      const register = await request("/api/register", {
+        method: "POST",
+        body: { email, password: "password123", name: "Calendar Owner" }
+      });
+      assert.equal(register.status, 201);
+
+      const statusBefore = await request("/api/integrations/google-calendar/status", {
+        method: "GET",
+        cookie: register.cookie
+      });
+      assert.equal(statusBefore.status, 200);
+      assert.equal(statusBefore.body.configured, true);
+      assert.equal(statusBefore.body.connected, false);
+
+      const connect = await request("/api/integrations/google-calendar/connect", {
+        method: "GET",
+        cookie: register.cookie,
+        redirect: "manual"
+      });
+      assert.equal(connect.status, 302);
+      assert.ok(connect.location.startsWith(googleConfig.authUrl));
+
+      const authRedirect = await fetch(connect.location, { redirect: "manual" });
+      assert.equal(authRedirect.status, 302);
+      const callbackLocation = authRedirect.headers.get("location") || "";
+      assert.ok(callbackLocation.includes("/api/integrations/google-calendar/callback"));
+      const callbackUrl = new URL(callbackLocation);
+      const callback = await request(callbackUrl.pathname + callbackUrl.search, {
+        method: "GET",
+        redirect: "manual"
+      });
+      assert.equal(callback.status, 302);
+      assert.equal(callback.location, "/app?google_calendar=connected");
+
+      const statusAfter = await request("/api/integrations/google-calendar/status", {
+        method: "GET",
+        cookie: register.cookie
+      });
+      assert.equal(statusAfter.status, 200);
+      assert.equal(statusAfter.body.connected, true);
+      assert.equal(statusAfter.body.googleEmail, "meet-owner@example.com");
+
+      const imported = await request("/api/integrations/google-calendar/import", {
+        method: "POST",
+        cookie: register.cookie,
+        body: { daysAhead: 21 }
+      });
+      assert.equal(imported.status, 200);
+      assert.equal(imported.body.importedCount, 1);
+      assert.equal(imported.body.updatedCount, 0);
+      assert.equal(Array.isArray(imported.body.state.meetings), true);
+      assert.equal(imported.body.state.meetings.length, 1);
+      assert.equal(imported.body.state.meetings[0].provider, "google_meet");
+      assert.ok(String(imported.body.state.meetings[0].meetLink).includes("meet.google.com"));
+
+      const importedAgain = await request("/api/integrations/google-calendar/import", {
+        method: "POST",
+        cookie: register.cookie,
+        body: { daysAhead: 21 }
+      });
+      assert.equal(importedAgain.status, 200);
+      assert.equal(importedAgain.body.importedCount, 0);
+      assert.equal(importedAgain.body.updatedCount, 1);
+      assert.equal(importedAgain.body.state.meetings.length, 1);
+
+      const disconnected = await request("/api/integrations/google-calendar/disconnect", {
+        method: "POST",
+        cookie: register.cookie
+      });
+      assert.equal(disconnected.status, 200);
+      assert.equal(disconnected.body.status.connected, false);
+    });
   });
 
   await withMockOpenAI(BASE_PORT + 20, async (openAIUrl) => {
@@ -318,6 +420,92 @@ async function request(baseUrl, pathname, options) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withMockGoogleCalendar(port, run) {
+  const idToken = createFakeJwt({ email: "meet-owner@example.com" });
+  const server = http.createServer(async (req, res) => {
+    const requestUrl = new URL(req.url, `http://127.0.0.1:${port}`);
+
+    if (req.method === "GET" && requestUrl.pathname === "/o/oauth2/v2/auth") {
+      const redirectUri = requestUrl.searchParams.get("redirect_uri");
+      const state = requestUrl.searchParams.get("state");
+      const location = `${redirectUri}?code=google-auth-code&state=${encodeURIComponent(state || "")}`;
+      res.writeHead(302, { Location: location });
+      res.end();
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/token") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const params = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+      const grantType = params.get("grant_type");
+      const payload = grantType === "refresh_token"
+        ? {
+            access_token: "google-access-token-refreshed",
+            token_type: "Bearer",
+            expires_in: 3600,
+            scope: "openid email https://www.googleapis.com/auth/calendar.readonly"
+          }
+        : {
+            access_token: "google-access-token",
+            refresh_token: "google-refresh-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+            scope: "openid email https://www.googleapis.com/auth/calendar.readonly",
+            id_token: idToken
+          };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(payload));
+      return;
+    }
+
+    if (req.method === "GET" && requestUrl.pathname === "/calendar/v3/calendars/primary/events") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        items: [
+          {
+            id: "event-meet-1",
+            summary: "Seguimiento con directora",
+            description: "Revisar metodología y cerrar próximos pasos.",
+            hangoutLink: "https://meet.google.com/abc-defg-hij",
+            organizer: { email: "meet-owner@example.com", displayName: "Mario" },
+            attendees: [
+              { email: "director@example.com", displayName: "Directora" },
+              { email: "meet-owner@example.com", displayName: "Mario" }
+            ],
+            start: { dateTime: "2026-05-20T16:00:00+02:00" }
+          }
+        ]
+      }));
+      return;
+    }
+
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  try {
+    await run({
+      authUrl: `http://127.0.0.1:${port}/o/oauth2/v2/auth`,
+      tokenUrl: `http://127.0.0.1:${port}/token`,
+      calendarBaseUrl: `http://127.0.0.1:${port}/calendar/v3`
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+function createFakeJwt(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
 }
 
 async function withMockOpenAI(port, run) {
