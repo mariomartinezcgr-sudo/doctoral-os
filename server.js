@@ -1767,6 +1767,7 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
     "Si el usuario te pide preparar una reunión, guarda una agenda útil dentro de la reunión adecuada.",
     "Si el usuario te pide cerrar una reunión a partir de notas, guarda resumen, decisiones y tareas dentro de esa reunión.",
+    "Cuando cierres una reunión, procura que tasks deje siguientes pasos concretos y accionables.",
     "Si el usuario te pide responder a un comentario, guarda una respuesta de trabajo dentro del comentario correspondiente.",
     "Si el usuario trabaja un capítulo concreto, puedes detectar la sección más floja, convertir un comentario en checklist de reescritura, proponer estructura de un apartado y preparar la siguiente sesión.",
     "Si el usuario te pide plan semanal, puedes crear hasta tres tareas concretas usando varias llamadas de herramienta.",
@@ -2277,6 +2278,11 @@ function executeAssistantTool(state, call, pendingActions = []) {
       tasks: meeting.tasks || "",
       next: meeting.next || ""
     });
+    const followupTasks = buildMeetingFollowupTasksFromClosure(state.tasks, meeting);
+    followupTasks.forEach((task) => {
+      state.tasks.unshift(task);
+      pushPendingAssistantAction(pendingActions, { type: "create_task", task });
+    });
     return {
       ok: true,
       meeting: {
@@ -2287,7 +2293,8 @@ function executeAssistantTool(state, call, pendingActions = []) {
         decisions: meeting.decisions || "",
         tasks: meeting.tasks || "",
         next: meeting.next || ""
-      }
+      },
+      createdTasks: followupTasks.map((task) => ({ title: task.title || "", due: task.due || "" }))
     };
   }
 
@@ -2396,6 +2403,85 @@ function findAssistantReviewComment(reviewComments, chapter) {
       .sort((a, b) => String(a.due || "9999-12-31").localeCompare(String(b.due || "9999-12-31")))[0] || null;
   }
   return items.find((item) => normalizeChapterTitle(item.chapter) === normalizeChapterTitle(chapterTitle)) || null;
+}
+
+function buildMeetingFollowupTasksFromClosure(existingTasks, meeting) {
+  const fallbackDue = normalizeIsoDate(meeting?.next) || "";
+  return splitMultilineText(meeting?.tasks)
+    .map((line) => buildMeetingFollowupTaskFromLine(existingTasks, line, fallbackDue))
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function buildMeetingFollowupTaskFromLine(existingTasks, line, fallbackDue) {
+  const title = normalizeMeetingTaskTitleText(line);
+  if (!title || taskTitleExists(existingTasks, title)) return null;
+  const due = extractDateFromLooseText(line) || fallbackDue;
+  const area = inferMeetingTaskAreaServer(title);
+  const status = inferTaskStatusFromDue(due);
+  return {
+    id: createEntityId("tk"),
+    title,
+    area,
+    status,
+    due,
+    effort: inferMeetingTaskEffortServer(area, title),
+    impact: inferMeetingTaskImpactServer(status, area, title)
+  };
+}
+
+function splitMultilineText(value) {
+  return String(value || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function normalizeMeetingTaskTitleText(value) {
+  return String(value || "")
+    .replace(/^[-*•]\s*/, "")
+    .replace(/^\d+[.)]\s*/, "")
+    .replace(/\b(?:el|para el|antes del)\s+\d{4}-\d{2}-\d{2}\b/gi, "")
+    .replace(/\b(?:el|para el|antes del)\s+\d{1,2}\/\d{1,2}\/20\d{2}\b/gi, "")
+    .replace(/[.;:,]+$/g, "")
+    .trim();
+}
+
+function taskTitleExists(existingTasks, title) {
+  const normalizedTitle = normalizeSimple(title);
+  return (Array.isArray(existingTasks) ? existingTasks : []).some((task) => normalizeSimple(task?.title || "") === normalizedTitle);
+}
+
+function extractDateFromLooseText(value) {
+  const text = String(value || "").trim();
+  let match = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  match = text.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (match) return `${match[3]}-${String(match[2]).padStart(2, "0")}-${String(match[1]).padStart(2, "0")}`;
+  return "";
+}
+
+function inferMeetingTaskAreaServer(title) {
+  const normalized = normalizeSimple(title);
+  if (/(capitulo|capítulo|apartado|marco|metodo|metodolog|introduccion|introducción|borrador|redact|reescrib)/.test(normalized)) return "Capítulos";
+  if (/(comentario|revision|revisión|respuesta|director|directora)/.test(normalized)) return "Revisión";
+  if (/(lectura|articulo|artículo|fuente|cita|bibliografia|bibliografía)/.test(normalized)) return "Lecturas";
+  if (/(reunion|reunión|agenda|coordinar|confirmar|convocar|meet)/.test(normalized)) return "Reuniones";
+  return "General";
+}
+
+function inferMeetingTaskEffortServer(area, title) {
+  const normalized = normalizeSimple(title);
+  if (area === "Capítulos" || /(reescrib|redact|analiz|borrador)/.test(normalized)) return "90 min";
+  if (area === "Reuniones" || /(confirmar|coordinar|convocar|agenda)/.test(normalized)) return "30 min";
+  return "45 min";
+}
+
+function inferMeetingTaskImpactServer(status, area, title) {
+  const normalized = normalizeSimple(title);
+  if (status === "today") return "Alto";
+  if (area === "Capítulos" || /(enviar|cerrar|entregar|resolver|reescrib|redact)/.test(normalized)) return "Alto";
+  return "Medio";
 }
 
 function parseJsonObject(value) {

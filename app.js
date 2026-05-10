@@ -5184,22 +5184,29 @@ function prepareMeetingClosureFromPrompt(message) {
   }
 
   const closure = buildMeetingClosureDraft(meeting);
+  const followupTasks = buildMeetingClosureFollowupTasks(meeting, closure);
+  const taskPreview = followupTasks.length
+    ? `\n\nTareas que también pasaré al plan semanal:\n${followupTasks.map((task) => `- ${task.title}${task.due ? ` (${formatDate(task.due)})` : ""}`).join("\n")}`
+    : "";
   return assistantReplyWithPreview(
-    `Te dejo una vista previa de cierre para ${formatMeetingLabel(meeting)}.\n\nResumen:\n${closure.summary}\n\nDecisiones:\n${bulletizeText(closure.decisions)}\n\nTareas:\n${bulletizeText(closure.tasks)}\n\nSi la confirmas, la dejo guardada dentro de la reunión.`,
-    [{
-      type: "update_meeting_closure",
-      meetingId: meeting.id,
-      meetingLabel: formatMeetingLabel(meeting),
-      date: meeting.date,
-      time: meeting.time,
-      summary: closure.summary,
-      decisions: closure.decisions,
-      tasks: closure.tasks,
-      next: closure.next
-    }],
+    `Te dejo una vista previa de cierre para ${formatMeetingLabel(meeting)}.\n\nResumen:\n${closure.summary}\n\nDecisiones:\n${bulletizeText(closure.decisions)}\n\nTareas:\n${bulletizeText(closure.tasks)}${taskPreview}\n\nSi la confirmas, la dejo guardada dentro de la reunión.`,
+    [
+      {
+        type: "update_meeting_closure",
+        meetingId: meeting.id,
+        meetingLabel: formatMeetingLabel(meeting),
+        date: meeting.date,
+        time: meeting.time,
+        summary: closure.summary,
+        decisions: closure.decisions,
+        tasks: closure.tasks,
+        next: closure.next
+      },
+      ...followupTasks.map((task) => ({ type: "create_task", task }))
+    ],
     {
-      summary: `Voy a cerrar ${formatMeetingLabel(meeting)} con resumen, decisiones y tareas.`,
-      toastMessage: "Cierre de reunión guardado desde TeDoc"
+      summary: `Voy a cerrar ${formatMeetingLabel(meeting)} con resumen, decisiones y tareas${followupTasks.length ? ` y crear ${followupTasks.length} tarea${followupTasks.length === 1 ? "" : "s"} de seguimiento` : ""}.`,
+      toastMessage: followupTasks.length ? "Cierre de reunión y tareas guardados desde TeDoc" : "Cierre de reunión guardado desde TeDoc"
     }
   );
 }
@@ -5295,6 +5302,58 @@ function buildMeetingClosureDraft(meeting) {
     tasks: taskLines.join("\n"),
     next
   };
+}
+
+function buildMeetingClosureFollowupTasks(meeting, closure) {
+  const style = resolveAssistantStyle(refreshAssistantStyleMemory(state));
+  const fallbackDue = closure.next || meeting.next || "";
+  return splitLines(closure.tasks)
+    .map((line) => buildMeetingFollowupTaskDraft(meeting, line, fallbackDue, style))
+    .filter((task) => task?.title && !taskExists(task.title))
+    .slice(0, 3);
+}
+
+function buildMeetingFollowupTaskDraft(meeting, line, fallbackDue, style) {
+  const rawLine = cleanMeetingNoteLine(line);
+  const title = normalizeMeetingFollowupTaskTitle(rawLine);
+  if (!title) return null;
+  const due = extractDateFromText(rawLine) || fallbackDue || "";
+  const area = inferTaskArea(title);
+  const intensity = inferMeetingFollowupIntensity(area, title);
+  return {
+    id: createId("tk"),
+    title,
+    area,
+    status: inferTaskColumn(due),
+    due,
+    effort: preferredAssistantEffort(style, intensity),
+    impact: inferMeetingFollowupImpact(due, title, area),
+    done: false,
+    completedAt: ""
+  };
+}
+
+function normalizeMeetingFollowupTaskTitle(text) {
+  const cleaned = String(text || "")
+    .replace(/\b(?:el|para el|antes del)\s+\d{4}-\d{2}-\d{2}\b/gi, "")
+    .replace(/\b(?:el|para el|antes del)\s+\d{1,2}\/\d{1,2}\/20\d{2}\b/gi, "")
+    .replace(/[.;:,]+$/g, "")
+    .trim();
+  return capitalizeSentence(cleaned);
+}
+
+function inferMeetingFollowupIntensity(area, title) {
+  const normalized = normalizeUserText(title);
+  if (area === "Capítulos" || /(reescrib|redact|borrador|capitulo|capítulo|apartado|marco|metodo|método)/.test(normalized)) return "high";
+  if (area === "Reuniones" || /(preparar agenda|coordinar|confirmar|convocar)/.test(normalized)) return "low";
+  return "medium";
+}
+
+function inferMeetingFollowupImpact(due, title, area) {
+  const normalized = normalizeUserText(title);
+  if (inferTaskColumn(due) === "today") return "Alto";
+  if (area === "Capítulos" || /(enviar|cerrar|entregar|reescrib|redact|resolver)/.test(normalized)) return "Alto";
+  return "Medio";
 }
 
 function parseMeetingNotesSections(text) {

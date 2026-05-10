@@ -380,6 +380,7 @@ async function main() {
       assert.equal(meetingClosure.body.mode, "openai");
       assert.ok(meetingClosure.body.pendingAction);
       assert.equal(meetingClosure.body.pendingAction.actions[0].type, "update_meeting_closure");
+      assert.ok(meetingClosure.body.pendingAction.actions.some((action) => action.type === "create_task"));
       assert.equal(meetingClosure.body.state.meetings[0].summary, "");
       assert.ok(String(meetingClosure.body.reply).toLowerCase().includes("vista previa"));
     });
