@@ -55,6 +55,7 @@ const contentTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
@@ -525,23 +526,26 @@ async function handleApi(req, res) {
       const filePath = readingPdfPath(auth.user.id, readingId);
       const originalName = safeReadingFileName(req.headers["x-file-name"] || `${reading.title || "lectura"}.pdf`);
       const uploadedAt = new Date().toISOString();
+      const fileMeta = {
+        name: originalName,
+        size: body.length,
+        mimeType: "application/pdf",
+        uploadedAt,
+        url: buildReadingFileUrl(readingId)
+      };
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, body);
+      reading.pdf = fileMeta;
+      saveUserState(auth.user.id, state);
 
       sendJson(res, 200, {
         ok: true,
-        file: {
-          name: originalName,
-          size: body.length,
-          mimeType: "application/pdf",
-          uploadedAt,
-          url: buildReadingFileUrl(readingId)
-        }
+        file: fileMeta
       });
       return;
     }
 
-    if (req.method === "GET") {
+    if (req.method === "GET" || req.method === "HEAD") {
       const filePath = readingPdfPath(auth.user.id, readingId);
       if (!fs.existsSync(filePath)) {
         sendJson(res, 404, { error: "PDF no encontrado." });
@@ -549,12 +553,45 @@ async function handleApi(req, res) {
       }
       const fileName = safeReadingFileName(reading.pdf && reading.pdf.name || `${reading.title || "lectura"}.pdf`);
       const stat = fs.statSync(filePath);
-      res.writeHead(200, {
+      const rangeHeader = String(req.headers.range || "").trim();
+      const baseHeaders = {
         ...securityHeaders(req),
         "Content-Type": "application/pdf",
-        "Content-Length": stat.size,
         "Content-Disposition": `inline; filename="${fileName}"`,
+        "Accept-Ranges": "bytes",
         "Cache-Control": "no-store"
+      };
+
+      if (rangeHeader.startsWith("bytes=")) {
+        const [rawStart, rawEnd] = rangeHeader.replace(/^bytes=/, "").split("-", 2);
+        const start = rawStart ? Number(rawStart) : 0;
+        const end = rawEnd ? Number(rawEnd) : stat.size - 1;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= stat.size) {
+          res.writeHead(416, {
+            ...baseHeaders,
+            "Content-Range": `bytes */${stat.size}`
+          });
+          res.end();
+          return;
+        }
+        const chunkEnd = Math.min(end, stat.size - 1);
+        const chunkSize = chunkEnd - start + 1;
+        res.writeHead(206, {
+          ...baseHeaders,
+          "Content-Length": chunkSize,
+          "Content-Range": `bytes ${start}-${chunkEnd}/${stat.size}`
+        });
+        if (req.method === "HEAD") {
+          res.end();
+          return;
+        }
+        fs.createReadStream(filePath, { start, end: chunkEnd }).pipe(res);
+        return;
+      }
+
+      res.writeHead(200, {
+        ...baseHeaders,
+        "Content-Length": stat.size
       });
       if (req.method === "HEAD") {
         res.end();
@@ -567,6 +604,8 @@ async function handleApi(req, res) {
     if (req.method === "DELETE") {
       const filePath = readingPdfPath(auth.user.id, readingId);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      reading.pdf = null;
+      saveUserState(auth.user.id, state);
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -989,7 +1028,7 @@ function serveFile(req, res, filePath) {
 
 function securityHeaders(req) {
   const headers = {
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob: https://cdnjs.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), browsing-topics=()",

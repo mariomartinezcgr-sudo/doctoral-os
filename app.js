@@ -8,7 +8,8 @@ const DEMO_QUERY_PARAM = "demo";
 const NEXT_QUERY_PARAM = "next";
 const GOOGLE_CALENDAR_QUERY_PARAM = "google_calendar";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
-const PDFJS_CDN_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js";
+const PDFJS_MODULE_URL = "/assets/vendor/pdfjs/pdf.min.mjs";
+const PDFJS_WORKER_URL = "/assets/vendor/pdfjs/pdf.worker.min.mjs";
 const MAX_READING_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_LOCAL_SNAPSHOTS = 6;
 const SNAPSHOT_INTERVAL_MS = 12 * 60 * 1000;
@@ -119,6 +120,10 @@ let assistantBusy = false;
 let assistantPendingAction = null;
 let assistantUndoState = null;
 let readingPdfViewer = createInitialReadingPdfViewerState();
+let pdfJsLibRef = null;
+let pdfJsLoadPromise = null;
+let readingPdfRenderJob = Promise.resolve();
+let readingPdfRenderRequest = 0;
 
 const screen = document.querySelector("#screen");
 const viewTitle = document.querySelector("#viewTitle");
@@ -190,9 +195,33 @@ function createInitialReadingPdfViewerState() {
 }
 
 function configurePdfJs() {
-  if (window.pdfjsLib) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN_WORKER_URL;
+  void ensurePdfJsLoaded();
+}
+
+async function ensurePdfJsLoaded() {
+  if (pdfJsLibRef?.getDocument) return pdfJsLibRef;
+  if (!pdfJsLoadPromise) {
+    pdfJsLoadPromise = import(PDFJS_MODULE_URL)
+      .then((module) => {
+        const lib = window.pdfjsLib?.getDocument
+          ? window.pdfjsLib
+          : module?.default?.getDocument
+            ? module.default
+            : module;
+        if (!lib?.getDocument) throw new Error("pdf.js no expone getDocument.");
+        if (lib.GlobalWorkerOptions) {
+          lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+        }
+        pdfJsLibRef = lib;
+        return lib;
+      })
+      .catch((error) => {
+        console.error("No se pudo cargar pdf.js", error);
+        pdfJsLoadPromise = null;
+        return null;
+      });
   }
+  return pdfJsLoadPromise;
 }
 
 function hydrateIcons(root = document) {
@@ -2978,7 +3007,9 @@ async function initReadingPdfView() {
     updateReadingPdfSelectionUi();
     return;
   }
-  if (!window.pdfjsLib) {
+  applyReadingPdfViewerStatus({ loading: true, error: "" });
+  const pdfjsLib = await ensurePdfJsLoaded();
+  if (!pdfjsLib) {
     applyReadingPdfViewerStatus({ error: "El visor PDF no se ha podido cargar en este navegador." });
     return;
   }
@@ -2986,19 +3017,19 @@ async function initReadingPdfView() {
     resetReadingPdfViewer(reading.id);
   }
   if (!readingPdfViewer.document) {
-    await loadReadingPdfDocument(reading);
+    await loadReadingPdfDocument(reading, pdfjsLib);
     return;
   }
   updateReadingPdfPageMeta();
-  await renderReadingPdfPage(reading);
+  await renderReadingPdfPage(reading, pdfjsLib);
 }
 
-async function loadReadingPdfDocument(reading) {
+async function loadReadingPdfDocument(reading, pdfjsLib = pdfJsLibRef) {
   try {
     readingPdfViewer.loading = true;
     readingPdfViewer.error = "";
     applyReadingPdfViewerStatus({ loading: true });
-    const loadingTask = window.pdfjsLib.getDocument({
+    const loadingTask = pdfjsLib.getDocument({
       url: currentReadingPdfUrl(reading),
       withCredentials: true
     });
@@ -3008,8 +3039,9 @@ async function loadReadingPdfDocument(reading) {
     readingPdfViewer.totalPages = Number(documentRef.numPages || 1);
     readingPdfViewer.currentPage = Math.min(Math.max(readingPdfViewer.currentPage || 1, 1), readingPdfViewer.totalPages);
     updateReadingPdfPageMeta();
-    await renderReadingPdfPage(reading);
+    await renderReadingPdfPage(reading, pdfjsLib);
   } catch (error) {
+    console.error("No se pudo abrir el PDF en la app", error);
     readingPdfViewer.error = "No se ha podido abrir el PDF en la app.";
     applyReadingPdfViewerStatus({ error: readingPdfViewer.error });
   } finally {
@@ -3018,44 +3050,52 @@ async function loadReadingPdfDocument(reading) {
   }
 }
 
-async function renderReadingPdfPage(reading) {
-  if (!reading || !readingPdfViewer.document || readingPdfViewer.readingId !== reading.id) return;
-  const canvas = screen.querySelector("[data-reading-pdf-canvas]");
-  const highlightLayer = screen.querySelector("[data-reading-pdf-highlights]");
-  const textLayer = screen.querySelector("[data-reading-pdf-text]");
-  if (!canvas || !textLayer || !highlightLayer) return;
+async function renderReadingPdfPage(reading, pdfjsLib = pdfJsLibRef) {
+  const requestId = ++readingPdfRenderRequest;
+  const previousJob = readingPdfRenderJob.catch(() => {});
+  const nextJob = previousJob.then(async () => {
+    if (!reading || !readingPdfViewer.document || readingPdfViewer.readingId !== reading.id) return;
+    const canvas = screen.querySelector("[data-reading-pdf-canvas]");
+    const highlightLayer = screen.querySelector("[data-reading-pdf-highlights]");
+    const textLayer = screen.querySelector("[data-reading-pdf-text]");
+    if (!canvas || !textLayer || !highlightLayer) return;
 
-  applyReadingPdfViewerStatus({ loading: true, error: "" });
-  const page = await readingPdfViewer.document.getPage(readingPdfViewer.currentPage);
-  const viewport = page.getViewport({ scale: readingPdfViewer.scale });
-  const context = canvas.getContext("2d");
-  canvas.width = Math.ceil(viewport.width);
-  canvas.height = Math.ceil(viewport.height);
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
-  highlightLayer.style.width = `${viewport.width}px`;
-  highlightLayer.style.height = `${viewport.height}px`;
-  await page.render({ canvasContext: context, viewport }).promise;
+    applyReadingPdfViewerStatus({ loading: true, error: "" });
+    const page = await readingPdfViewer.document.getPage(readingPdfViewer.currentPage);
+    if (requestId !== readingPdfRenderRequest) return;
+    const viewport = page.getViewport({ scale: readingPdfViewer.scale });
+    const context = canvas.getContext("2d");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    canvas.style.width = `${viewport.width}px`;
+    canvas.style.height = `${viewport.height}px`;
+    highlightLayer.style.width = `${viewport.width}px`;
+    highlightLayer.style.height = `${viewport.height}px`;
+    await page.render({ canvasContext: context, viewport }).promise;
+    if (requestId !== readingPdfRenderRequest) return;
 
-  highlightLayer.innerHTML = "";
-  textLayer.innerHTML = "";
-  textLayer.style.width = `${viewport.width}px`;
-  textLayer.style.height = `${viewport.height}px`;
-  const textContent = await page.getTextContent();
-  const textTask = window.pdfjsLib.renderTextLayer({
-    textContentSource: textContent,
-    container: textLayer,
-    viewport,
-    textDivs: []
+    highlightLayer.innerHTML = "";
+    textLayer.innerHTML = "";
+    textLayer.style.width = `${viewport.width}px`;
+    textLayer.style.height = `${viewport.height}px`;
+    const textContent = await page.getTextContent();
+    const textLayerBuilder = new pdfjsLib.TextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport
+    });
+    await textLayerBuilder.render();
+    if (requestId !== readingPdfRenderRequest) return;
+
+    textLayer.onmouseup = captureReadingPdfSelection;
+    textLayer.onkeyup = captureReadingPdfSelection;
+    renderReadingPdfHighlights(reading, viewport);
+    updateReadingPdfPageMeta();
+    applyReadingPdfViewerStatus({ loading: false, error: readingPdfViewer.error });
+    updateReadingPdfSelectionUi();
   });
-  if (textTask && textTask.promise) await textTask.promise;
-
-  textLayer.onmouseup = captureReadingPdfSelection;
-  textLayer.onkeyup = captureReadingPdfSelection;
-  renderReadingPdfHighlights(reading, viewport);
-  updateReadingPdfPageMeta();
-  applyReadingPdfViewerStatus({ loading: false, error: readingPdfViewer.error });
-  updateReadingPdfSelectionUi();
+  readingPdfRenderJob = nextJob.catch(() => {});
+  return nextJob;
 }
 
 function saveReadingHighlight() {

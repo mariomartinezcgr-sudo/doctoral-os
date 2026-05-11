@@ -271,6 +271,30 @@ async function main() {
     assert.equal(uploaded.body.ok, true);
     assert.equal(uploaded.body.file.name, "articulo-prueba.pdf");
 
+    const reloginAfterUpload = await request("/api/login", {
+      method: "POST",
+      body: { email, password: "password123" }
+    });
+    assert.equal(reloginAfterUpload.status, 200);
+    assert.equal(reloginAfterUpload.body.state.readings[0].pdf.name, "articulo-prueba.pdf");
+
+    const headed = await request("/api/readings/rd-pdf/file", {
+      method: "HEAD",
+      cookie: register.cookie
+    });
+    assert.equal(headed.status, 200);
+    assert.equal(headed.contentType.includes("application/pdf"), true);
+
+    const ranged = await request("/api/readings/rd-pdf/file", {
+      method: "GET",
+      cookie: register.cookie,
+      headers: {
+        Range: "bytes=0-15"
+      }
+    });
+    assert.equal(ranged.status, 206);
+    assert.ok(String(ranged.body).startsWith("%PDF-1.4"));
+
     const fetched = await request("/api/readings/rd-pdf/file", {
       method: "GET",
       cookie: register.cookie
@@ -285,6 +309,13 @@ async function main() {
     });
     assert.equal(removed.status, 200);
     assert.equal(removed.body.ok, true);
+
+    const reloginAfterDelete = await request("/api/login", {
+      method: "POST",
+      body: { email, password: "password123" }
+    });
+    assert.equal(reloginAfterDelete.status, 200);
+    assert.equal(reloginAfterDelete.body.state.readings[0].pdf, null);
 
     const missing = await request("/api/readings/rd-pdf/file", {
       method: "GET",
