@@ -71,11 +71,20 @@ Opcionalmente puedes añadir:
 - Panel general orientado a tres acciones: escribir capitulo, planificar semana y resolver comentarios.
 - Editor real de capitulos con metadatos, secciones, borrador, notas internas y checklist de calidad.
 - Lecturas basicas vinculadas a capitulos.
+- Lecturas con PDF privado, visor dentro de la app, subrayados persistentes y banco de extractos reutilizables por capítulo.
 - Plan semanal tipo tablero.
 - Reuniones y revision en una sola vista.
 - Bitacora de escritura.
 - TeDoc, asistente de tesis con modo local y, si configuras OpenAI, respuestas con IA y acciones sobre tareas y reuniones.
 - Cuenta, sincronizacion y exportacion de respaldo.
+
+## PDFs en Lecturas
+
+Los PDFs de `Lecturas` se guardan como archivos privados del servidor dentro del volumen de datos y no como parte del `state_json`.
+
+- El backup JSON exporta la ficha de la lectura y sus subrayados/notas.
+- El binario del PDF no viaja dentro del backup JSON.
+- Cada PDF se sirve solo a la persona autenticada propietaria de esa lectura.
 
 ## Archivos
 

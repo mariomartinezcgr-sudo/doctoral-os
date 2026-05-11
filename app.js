@@ -8,6 +8,8 @@ const DEMO_QUERY_PARAM = "demo";
 const NEXT_QUERY_PARAM = "next";
 const GOOGLE_CALENDAR_QUERY_PARAM = "google_calendar";
 const API_ENABLED = window.location.protocol === "http:" || window.location.protocol === "https:";
+const PDFJS_CDN_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js";
+const MAX_READING_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_LOCAL_SNAPSHOTS = 6;
 const SNAPSHOT_INTERVAL_MS = 12 * 60 * 1000;
 const DEFAULT_CHECKLIST_ITEMS = [
@@ -74,6 +76,8 @@ const defaultState = {
   literatureFilter: "",
   literatureCitationId: "",
   literatureCitationStyle: "APA 7",
+  literatureExtractFilter: "",
+  literatureExtractChapter: "all",
   assistantStyleMemory: createInitialAssistantStyleMemory(),
   onboarding: createInitialOnboardingState(),
   project: {
@@ -114,6 +118,7 @@ let syncTimer = null;
 let assistantBusy = false;
 let assistantPendingAction = null;
 let assistantUndoState = null;
+let readingPdfViewer = createInitialReadingPdfViewerState();
 
 const screen = document.querySelector("#screen");
 const viewTitle = document.querySelector("#viewTitle");
@@ -159,9 +164,35 @@ function init() {
   screen.addEventListener("click", handleScreenClick);
   screen.addEventListener("submit", handleFormSubmit);
   screen.addEventListener("input", handleScreenInput);
+  screen.addEventListener("change", handleScreenChange);
+  configurePdfJs();
   render();
   updateAuthUI();
   restoreSession().finally(() => maybeOpenAuthFromUrl());
+}
+
+function createInitialReadingPdfViewerState() {
+  return {
+    readingId: "",
+    document: null,
+    totalPages: 0,
+    currentPage: 1,
+    scale: 1.16,
+    loading: false,
+    error: "",
+    selectedText: "",
+    selectedNote: "",
+    selectedRects: [],
+    selectedPage: 1,
+    uploadBusy: false,
+    deleteBusy: false
+  };
+}
+
+function configurePdfJs() {
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN_WORKER_URL;
+  }
 }
 
 function hydrateIcons(root = document) {
@@ -486,6 +517,37 @@ function clearDemoQuery() {
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 }
 
+function normalizeReadingPdfMeta(pdf) {
+  if (!pdf || typeof pdf !== "object") return null;
+  const url = String(pdf.url || "").trim();
+  if (!url) return null;
+  return {
+    name: String(pdf.name || "lectura.pdf").trim() || "lectura.pdf",
+    size: Number(pdf.size || 0),
+    mimeType: String(pdf.mimeType || "application/pdf").trim() || "application/pdf",
+    uploadedAt: String(pdf.uploadedAt || "").trim(),
+    url
+  };
+}
+
+function normalizeReadingAnnotations(annotations) {
+  return (Array.isArray(annotations) ? annotations : []).map((item) => ({
+    id: item.id || createId("hl"),
+    page: Number(item.page || 1),
+    text: String(item.text || "").trim(),
+    note: String(item.note || "").trim(),
+    color: String(item.color || "amber").trim() || "amber",
+    chapterId: String(item.chapterId || "").trim(),
+    rects: (Array.isArray(item.rects) ? item.rects : []).map((rect) => ({
+      x: Number(rect.x || 0),
+      y: Number(rect.y || 0),
+      w: Number(rect.w || 0),
+      h: Number(rect.h || 0)
+    })).filter((rect) => rect.w > 0 && rect.h > 0),
+    createdAt: item.createdAt || new Date().toISOString()
+  })).filter((item) => item.text);
+}
+
 function ensureStateShape(target) {
   target.chapters = Array.isArray(target.chapters) ? target.chapters : [];
   target.readings = Array.isArray(target.readings) ? target.readings : [];
@@ -499,6 +561,8 @@ function ensureStateShape(target) {
   target.onboarding = normalizeOnboardingState(target.onboarding, target.project?.candidate);
   target.literatureCitationId = typeof target.literatureCitationId === "string" ? target.literatureCitationId : "";
   target.literatureCitationStyle = ["APA 7", "MLA 9", "Chicago", "BibTeX"].includes(target.literatureCitationStyle) ? target.literatureCitationStyle : "APA 7";
+  target.literatureExtractFilter = typeof target.literatureExtractFilter === "string" ? target.literatureExtractFilter : "";
+  target.literatureExtractChapter = typeof target.literatureExtractChapter === "string" ? target.literatureExtractChapter : "all";
   target.meetings = target.meetings.map((meeting) => normalizeMeetingRecord(meeting));
   target.readings.forEach((reading) => {
     if (reading.status === "Leido") reading.status = "Leído";
@@ -506,6 +570,8 @@ function ensureStateShape(target) {
     if (reading.title === "Lectura sin título") reading.title = "Lectura sin título";
     reading.type = reading.type || "Artículo";
     reading.source = reading.source || "";
+    reading.pdf = normalizeReadingPdfMeta(reading.pdf);
+    reading.annotations = normalizeReadingAnnotations(reading.annotations);
   });
   target.tasks.forEach((task) => {
     if (task.area === "Revision") task.area = "Revisión";
@@ -2056,7 +2122,7 @@ function handleTopbarAction(event) {
   if (action === "sync-now") syncNow(true);
 }
 
-function handleScreenClick(event) {
+async function handleScreenClick(event) {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
@@ -2292,10 +2358,90 @@ function handleScreenClick(event) {
   }
 
   if (action === "delete-reading") {
-    state.readings = state.readings.filter((reading) => reading.id !== id);
-    if (state.literatureCitationId === id) state.literatureCitationId = "";
-    saveState("Lectura eliminada");
+    try {
+      await deleteReadingRecord(id);
+    } catch (error) {
+      showToast(error.message || "No se pudo eliminar la lectura.");
+    }
+    return;
+  }
+
+  if (action === "select-reading") {
+    state.literatureCitationId = id;
+    resetReadingPdfViewer(id);
+    saveState("", { skipSync: true });
     render();
+    return;
+  }
+
+  if (action === "reading-pdf-prev") {
+    if (!readingPdfViewer.document) return;
+    readingPdfViewer.currentPage = Math.max(1, readingPdfViewer.currentPage - 1);
+    clearReadingPdfSelection(false);
+    await renderReadingPdfPage(findReadingById(state.literatureCitationId));
+    return;
+  }
+
+  if (action === "reading-pdf-next") {
+    if (!readingPdfViewer.document) return;
+    readingPdfViewer.currentPage = Math.min(readingPdfViewer.totalPages || 1, readingPdfViewer.currentPage + 1);
+    clearReadingPdfSelection(false);
+    await renderReadingPdfPage(findReadingById(state.literatureCitationId));
+    return;
+  }
+
+  if (action === "reading-pdf-zoom-in") {
+    if (!readingPdfViewer.document) return;
+    readingPdfViewer.scale = Math.min(2.2, Number((readingPdfViewer.scale + 0.1).toFixed(2)));
+    await renderReadingPdfPage(findReadingById(state.literatureCitationId));
+    return;
+  }
+
+  if (action === "reading-pdf-zoom-out") {
+    if (!readingPdfViewer.document) return;
+    readingPdfViewer.scale = Math.max(0.8, Number((readingPdfViewer.scale - 0.1).toFixed(2)));
+    await renderReadingPdfPage(findReadingById(state.literatureCitationId));
+    return;
+  }
+
+  if (action === "save-reading-highlight") {
+    saveReadingHighlight();
+    return;
+  }
+
+  if (action === "delete-reading-highlight") {
+    const reading = findReadingById(target.dataset.readingId);
+    if (!reading) return;
+    reading.annotations = (reading.annotations || []).filter((item) => item.id !== id);
+    saveState("Subrayado eliminado");
+    render();
+    return;
+  }
+
+  if (action === "reading-highlight-to-note") {
+    sendReadingHighlightToChapter(target.dataset.readingId, id);
+    return;
+  }
+
+  if (action === "open-reading-highlight") {
+    const readingId = target.dataset.readingId;
+    const reading = findReadingById(readingId);
+    const annotation = reading?.annotations?.find((item) => item.id === id);
+    if (!reading || !annotation) return;
+    state.literatureCitationId = readingId;
+    if (readingPdfViewer.readingId !== readingId) {
+      resetReadingPdfViewer(readingId);
+    }
+    readingPdfViewer.currentPage = Number(annotation.page || 1);
+    readingPdfViewer.selectedPage = Number(annotation.page || 1);
+    saveState("", { skipSync: true });
+    render();
+    return;
+  }
+
+  if (action === "remove-reading-pdf") {
+    await removeReadingPdf(id);
+    return;
   }
 
   if (action === "show-citation") {
@@ -2387,11 +2533,12 @@ function handleScreenClick(event) {
   }
 }
 
-function handleFormSubmit(event) {
+async function handleFormSubmit(event) {
   const form = event.target;
   if (!form.matches("form[data-form]")) return;
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(form).entries());
+  const formData = new FormData(form);
+  const data = Object.fromEntries(formData.entries());
   const formType = form.dataset.form;
 
   if (formType === "assistant") {
@@ -2473,13 +2620,28 @@ function handleFormSubmit(event) {
       status: data.status || "Pendiente",
       chapter: data.chapter || "Sin capítulo",
       use: data.use || "",
-      doi: data.doi || ""
+      doi: data.doi || "",
+      pdf: null,
+      annotations: []
     };
     state.readings.push(reading);
     state.literatureCitationId = reading.id;
+    const readingPdfFile = formData.get("pdfFile");
+    if (readingPdfFile instanceof File && readingPdfFile.size) {
+      const uploaded = await uploadReadingPdf(reading, readingPdfFile);
+      if (!uploaded) {
+        saveState("Lectura añadida sin PDF");
+        form.reset();
+        render();
+        return;
+      }
+      form.reset();
+      return;
+    }
     saveState("Lectura añadida");
     form.reset();
     render();
+    return;
   }
 
   if (formType === "task") {
@@ -2578,6 +2740,8 @@ function handleScreenInput(event) {
     const cursor = event.target.selectionStart;
     state.literatureFilter = event.target.value;
     renderLiterature();
+    hydrateIcons(screen);
+    initReadingPdfView();
     const restored = screen.querySelector("[data-literature-filter]");
     if (restored) {
       restored.focus();
@@ -2589,7 +2753,416 @@ function handleScreenInput(event) {
     state.literatureCitationStyle = event.target.value;
     saveState("", { skipSync: true });
     renderLiterature();
+    hydrateIcons(screen);
+    initReadingPdfView();
   }
+
+  if (event.target.matches("[data-reading-selection-note]")) {
+    readingPdfViewer.selectedNote = event.target.value;
+  }
+
+  if (event.target.matches("[data-literature-extract-filter]")) {
+    const cursor = event.target.selectionStart;
+    state.literatureExtractFilter = event.target.value;
+    renderLiterature();
+    hydrateIcons(screen);
+    initReadingPdfView();
+    const restored = screen.querySelector("[data-literature-extract-filter]");
+    if (restored) {
+      restored.focus();
+      restored.setSelectionRange(cursor, cursor);
+    }
+  }
+
+  if (event.target.matches("[data-literature-extract-chapter]")) {
+    state.literatureExtractChapter = event.target.value || "all";
+    saveState("", { skipSync: true });
+    renderLiterature();
+    hydrateIcons(screen);
+    initReadingPdfView();
+  }
+}
+
+function handleScreenChange(event) {
+  if (event.target.matches("[data-reading-pdf-upload]")) {
+    const file = event.target.files && event.target.files[0];
+    const readingId = event.target.dataset.id;
+    event.target.value = "";
+    if (file && readingId) {
+      uploadReadingPdfForExistingRecord(readingId, file);
+    }
+  }
+}
+
+function findReadingById(id) {
+  return state.readings.find((reading) => reading.id === id) || null;
+}
+
+function resetReadingPdfViewer(readingId = "") {
+  const nextPage = readingPdfViewer.readingId === readingId ? readingPdfViewer.currentPage : 1;
+  const nextScale = readingPdfViewer.scale || 1.16;
+  readingPdfViewer = {
+    ...createInitialReadingPdfViewerState(),
+    readingId,
+    currentPage: nextPage,
+    selectedPage: nextPage,
+    scale: nextScale
+  };
+}
+
+function currentReadingPdfUrl(reading) {
+  if (!reading?.pdf?.url) return "";
+  return `${reading.pdf.url}?v=${encodeURIComponent(reading.pdf.uploadedAt || "")}`;
+}
+
+function updateReadingPdfSelectionUi() {
+  const preview = screen.querySelector("[data-reading-selection-preview]");
+  const pageChip = screen.querySelector("[data-reading-selection-page]");
+  const saveButton = screen.querySelector("[data-action='save-reading-highlight']");
+  if (!preview || !pageChip || !saveButton) return;
+  preview.textContent = readingPdfViewer.selectedText || "Selecciona texto dentro del PDF para guardar aquí un subrayado con nota.";
+  pageChip.textContent = readingPdfViewer.selectedText ? `Pág. ${readingPdfViewer.selectedPage}` : "Sin selección";
+  saveButton.disabled = !readingPdfViewer.selectedText || !readingPdfViewer.selectedRects.length;
+}
+
+function applyReadingPdfViewerStatus({ loading = false, error = "" } = {}) {
+  const loadingNode = screen.querySelector("[data-reading-pdf-loading]");
+  const errorNode = screen.querySelector("[data-reading-pdf-error]");
+  if (loadingNode) loadingNode.hidden = !loading;
+  if (errorNode) {
+    errorNode.hidden = !error;
+    errorNode.textContent = error || "";
+  }
+}
+
+function updateReadingPdfPageMeta() {
+  const pageNode = screen.querySelector("[data-reading-pdf-page]");
+  const totalNode = screen.querySelector("[data-reading-pdf-total]");
+  const prevButton = screen.querySelector("[data-action='reading-pdf-prev']");
+  const nextButton = screen.querySelector("[data-action='reading-pdf-next']");
+  const scaleNode = screen.querySelector("[data-reading-pdf-scale]");
+  if (pageNode) pageNode.textContent = String(readingPdfViewer.currentPage || 1);
+  if (totalNode) totalNode.textContent = String(readingPdfViewer.totalPages || 1);
+  if (prevButton) prevButton.disabled = (readingPdfViewer.currentPage || 1) <= 1;
+  if (nextButton) nextButton.disabled = (readingPdfViewer.currentPage || 1) >= (readingPdfViewer.totalPages || 1);
+  if (scaleNode) scaleNode.textContent = `${Math.round((readingPdfViewer.scale || 1.16) * 100)}%`;
+}
+
+async function uploadReadingPdfForExistingRecord(readingId, file) {
+  const reading = findReadingById(readingId);
+  if (!reading) {
+    showToast("La lectura ya no está disponible.");
+    return;
+  }
+  await uploadReadingPdf(reading, file);
+}
+
+async function uploadReadingPdf(reading, file) {
+  if (!API_ENABLED || !auth.user) {
+    showToast("Para guardar PDFs necesitas entrar en la app privada.");
+    return false;
+  }
+  if (!file) return false;
+  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+    showToast("Sube un PDF válido.");
+    return false;
+  }
+  if (file.size > MAX_READING_PDF_BYTES) {
+    showToast("El PDF supera el límite de 20 MB.");
+    return false;
+  }
+
+  try {
+    readingPdfViewer.uploadBusy = true;
+    const response = await fetch(`/api/readings/${encodeURIComponent(reading.id)}/file`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/pdf",
+        "X-File-Name": file.name
+      },
+      body: file
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      openAuthModal("login");
+      showToast("La sesión ha caducado. Vuelve a entrar.");
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || "No se pudo subir el PDF.");
+    }
+
+    reading.pdf = normalizeReadingPdfMeta(result.file);
+    reading.annotations = Array.isArray(reading.annotations) ? reading.annotations : [];
+    state.literatureCitationId = reading.id;
+    resetReadingPdfViewer(reading.id);
+    saveState(reading.pdf ? "PDF vinculado a la lectura" : "Lectura actualizada");
+    render();
+    return true;
+  } catch (error) {
+    showToast(error.message || "No se pudo subir el PDF.");
+    return false;
+  } finally {
+    readingPdfViewer.uploadBusy = false;
+  }
+}
+
+async function removeReadingPdf(readingId) {
+  const reading = findReadingById(readingId);
+  if (!reading?.pdf) return;
+  if (!API_ENABLED || !auth.user) {
+    showToast("Necesitas sesión para borrar el PDF del servidor.");
+    return;
+  }
+  try {
+    readingPdfViewer.deleteBusy = true;
+    const response = await fetch(`/api/readings/${encodeURIComponent(readingId)}/file`, {
+      method: "DELETE",
+      credentials: "same-origin"
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "No se pudo eliminar el PDF.");
+    reading.pdf = null;
+    resetReadingPdfViewer(readingId);
+    saveState("PDF eliminado de la lectura");
+    render();
+  } catch (error) {
+    showToast(error.message || "No se pudo eliminar el PDF.");
+  } finally {
+    readingPdfViewer.deleteBusy = false;
+  }
+}
+
+function captureReadingPdfSelection() {
+  const textLayer = screen.querySelector("[data-reading-pdf-text]");
+  if (!textLayer) return;
+  const selection = window.getSelection();
+  const anchorNode = selection && selection.anchorNode;
+  if (!anchorNode || !textLayer.contains(anchorNode)) return;
+  const text = String(selection.toString() || "").replace(/\s+/g, " ").trim();
+  if (!text) return;
+  const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+  const layerBounds = textLayer.getBoundingClientRect();
+  const rects = range
+    ? [...range.getClientRects()]
+        .map((rect) => ({
+          x: (rect.left - layerBounds.left) / layerBounds.width,
+          y: (rect.top - layerBounds.top) / layerBounds.height,
+          w: rect.width / layerBounds.width,
+          h: rect.height / layerBounds.height
+        }))
+        .filter((rect) => rect.w > 0 && rect.h > 0)
+    : [];
+  readingPdfViewer.selectedText = text;
+  readingPdfViewer.selectedPage = readingPdfViewer.currentPage;
+  readingPdfViewer.selectedRects = rects;
+  updateReadingPdfSelectionUi();
+}
+
+function clearReadingPdfSelection(clearNote = true) {
+  readingPdfViewer.selectedText = "";
+  readingPdfViewer.selectedRects = [];
+  if (clearNote) readingPdfViewer.selectedNote = "";
+  if (window.getSelection) window.getSelection().removeAllRanges();
+  const noteField = screen.querySelector("[data-reading-selection-note]");
+  if (noteField && clearNote) noteField.value = "";
+  updateReadingPdfSelectionUi();
+}
+
+async function initReadingPdfView() {
+  const reading = findReadingById(state.literatureCitationId) || state.readings[0] || null;
+  if (!reading?.pdf?.url) {
+    resetReadingPdfViewer("");
+    updateReadingPdfSelectionUi();
+    return;
+  }
+  if (!window.pdfjsLib) {
+    applyReadingPdfViewerStatus({ error: "El visor PDF no se ha podido cargar en este navegador." });
+    return;
+  }
+  if (readingPdfViewer.readingId !== reading.id) {
+    resetReadingPdfViewer(reading.id);
+  }
+  if (!readingPdfViewer.document) {
+    await loadReadingPdfDocument(reading);
+    return;
+  }
+  updateReadingPdfPageMeta();
+  await renderReadingPdfPage(reading);
+}
+
+async function loadReadingPdfDocument(reading) {
+  try {
+    readingPdfViewer.loading = true;
+    readingPdfViewer.error = "";
+    applyReadingPdfViewerStatus({ loading: true });
+    const loadingTask = window.pdfjsLib.getDocument({
+      url: currentReadingPdfUrl(reading),
+      withCredentials: true
+    });
+    const documentRef = await loadingTask.promise;
+    if (readingPdfViewer.readingId !== reading.id) return;
+    readingPdfViewer.document = documentRef;
+    readingPdfViewer.totalPages = Number(documentRef.numPages || 1);
+    readingPdfViewer.currentPage = Math.min(Math.max(readingPdfViewer.currentPage || 1, 1), readingPdfViewer.totalPages);
+    updateReadingPdfPageMeta();
+    await renderReadingPdfPage(reading);
+  } catch (error) {
+    readingPdfViewer.error = "No se ha podido abrir el PDF en la app.";
+    applyReadingPdfViewerStatus({ error: readingPdfViewer.error });
+  } finally {
+    readingPdfViewer.loading = false;
+    applyReadingPdfViewerStatus({ loading: false, error: readingPdfViewer.error });
+  }
+}
+
+async function renderReadingPdfPage(reading) {
+  if (!reading || !readingPdfViewer.document || readingPdfViewer.readingId !== reading.id) return;
+  const canvas = screen.querySelector("[data-reading-pdf-canvas]");
+  const highlightLayer = screen.querySelector("[data-reading-pdf-highlights]");
+  const textLayer = screen.querySelector("[data-reading-pdf-text]");
+  if (!canvas || !textLayer || !highlightLayer) return;
+
+  applyReadingPdfViewerStatus({ loading: true, error: "" });
+  const page = await readingPdfViewer.document.getPage(readingPdfViewer.currentPage);
+  const viewport = page.getViewport({ scale: readingPdfViewer.scale });
+  const context = canvas.getContext("2d");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
+  highlightLayer.style.width = `${viewport.width}px`;
+  highlightLayer.style.height = `${viewport.height}px`;
+  await page.render({ canvasContext: context, viewport }).promise;
+
+  highlightLayer.innerHTML = "";
+  textLayer.innerHTML = "";
+  textLayer.style.width = `${viewport.width}px`;
+  textLayer.style.height = `${viewport.height}px`;
+  const textContent = await page.getTextContent();
+  const textTask = window.pdfjsLib.renderTextLayer({
+    textContentSource: textContent,
+    container: textLayer,
+    viewport,
+    textDivs: []
+  });
+  if (textTask && textTask.promise) await textTask.promise;
+
+  textLayer.onmouseup = captureReadingPdfSelection;
+  textLayer.onkeyup = captureReadingPdfSelection;
+  renderReadingPdfHighlights(reading, viewport);
+  updateReadingPdfPageMeta();
+  applyReadingPdfViewerStatus({ loading: false, error: readingPdfViewer.error });
+  updateReadingPdfSelectionUi();
+}
+
+function saveReadingHighlight() {
+  const reading = findReadingById(state.literatureCitationId);
+  if (!reading || !readingPdfViewer.selectedText) return;
+  reading.annotations = Array.isArray(reading.annotations) ? reading.annotations : [];
+  reading.annotations.unshift({
+    id: createId("hl"),
+    page: readingPdfViewer.selectedPage || readingPdfViewer.currentPage || 1,
+    text: readingPdfViewer.selectedText,
+    note: String(readingPdfViewer.selectedNote || "").trim(),
+    color: "amber",
+    chapterId: state.chapters.find((chapter) => chapter.title === reading.chapter)?.id || "",
+    rects: readingPdfViewer.selectedRects.map((rect) => ({ ...rect })),
+    createdAt: new Date().toISOString()
+  });
+  clearReadingPdfSelection();
+  saveState("Subrayado guardado");
+  render();
+}
+
+function renderReadingPdfHighlights(reading, viewport) {
+  const layer = screen.querySelector("[data-reading-pdf-highlights]");
+  if (!layer || !reading) return;
+  const highlights = (reading.annotations || []).filter((annotation) => Number(annotation.page || 1) === Number(readingPdfViewer.currentPage || 1) && Array.isArray(annotation.rects) && annotation.rects.length);
+  layer.innerHTML = highlights.map((annotation) => annotation.rects.map((rect) => `
+    <div class="reading-pdf-highlight" style="left:${rect.x * viewport.width}px;top:${rect.y * viewport.height}px;width:${rect.w * viewport.width}px;height:${rect.h * viewport.height}px" title="${escapeAttribute(annotation.note || annotation.text)}"></div>
+  `).join("")).join("");
+}
+
+function sendReadingHighlightToChapter(readingId, annotationId) {
+  const reading = findReadingById(readingId);
+  const annotation = reading?.annotations?.find((item) => item.id === annotationId);
+  if (!reading || !annotation) return;
+  const chapter = state.chapters.find((item) => item.id === annotation.chapterId) || state.chapters.find((item) => item.title === reading.chapter);
+  if (!chapter) {
+    showToast("Vincula primero la lectura a un capítulo para mandar la idea.");
+    return;
+  }
+  chapter.notes.unshift({
+    id: createId("nt"),
+    title: `Idea desde ${reading.title}`,
+    type: "Fuente",
+    date: todayISO(),
+    text: `Fuente: ${reading.authors} (${reading.year || "s. f."}) — ${reading.title}\nPágina: ${annotation.page}\n\nCita:\n“${annotation.text}”\n\nIdea:\n${annotation.note || "Desarrollar esta idea dentro del capítulo."}`
+  });
+  chapter.editorUpdatedAt = new Date().toISOString();
+  saveState("Idea enviada al capítulo");
+  render();
+}
+
+function chapterTitleFromId(id, fallback = "Sin capítulo") {
+  if (!id) return fallback;
+  return state.chapters.find((chapter) => chapter.id === id)?.title || fallback;
+}
+
+function buildReadingExtractBank() {
+  return state.readings.flatMap((reading) => (reading.annotations || []).map((annotation) => ({
+    readingId: reading.id,
+    readingTitle: reading.title,
+    readingAuthors: reading.authors,
+    readingYear: reading.year,
+    readingChapter: reading.chapter || "Sin capítulo",
+    annotation
+  })));
+}
+
+function filteredReadingExtractBank() {
+  const term = String(state.literatureExtractFilter || "").trim().toLowerCase();
+  const chapterFilter = String(state.literatureExtractChapter || "all");
+  return buildReadingExtractBank()
+    .filter((entry) => {
+      const chapterLabel = entry.annotation.chapterId ? chapterTitleFromId(entry.annotation.chapterId, entry.readingChapter) : entry.readingChapter;
+      const haystack = `${entry.readingTitle} ${entry.readingAuthors} ${entry.annotation.text} ${entry.annotation.note} ${chapterLabel}`.toLowerCase();
+      if (term && !haystack.includes(term)) return false;
+      if (chapterFilter !== "all" && chapterLabel !== chapterFilter) return false;
+      return true;
+    })
+    .sort((a, b) => String(b.annotation.createdAt || "").localeCompare(String(a.annotation.createdAt || "")));
+}
+
+function readingExtractChapterOptions() {
+  const fromReadings = state.readings.map((reading) => reading.chapter || "Sin capítulo");
+  const fromAnnotations = buildReadingExtractBank().map((entry) => entry.annotation.chapterId ? chapterTitleFromId(entry.annotation.chapterId, entry.readingChapter) : entry.readingChapter);
+  return [...new Set([...fromReadings, ...fromAnnotations].map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+async function deleteReadingRecord(readingId) {
+  const reading = findReadingById(readingId);
+  if (!reading) return;
+  if (reading.pdf && API_ENABLED && auth.user) {
+    const response = await fetch(`/api/readings/${encodeURIComponent(readingId)}/file`, {
+      method: "DELETE",
+      credentials: "same-origin"
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || "No se pudo eliminar el PDF asociado.");
+    }
+  }
+  state.readings = state.readings.filter((item) => item.id !== readingId);
+  if (state.literatureCitationId === readingId) {
+    state.literatureCitationId = state.readings[0]?.id || "";
+  }
+  resetReadingPdfViewer(state.literatureCitationId);
+  saveState("Lectura eliminada");
+  render();
 }
 
 function render() {
@@ -2629,6 +3202,7 @@ function render() {
 
   (renderers[state.activeView] || renderers.dashboard)();
   hydrateIcons(screen);
+  if (state.activeView === "literature") initReadingPdfView();
   renderOnboardingModal(false);
   launchOnboardingIfNeeded();
   screen.focus({ preventScroll: true });
@@ -3495,15 +4069,21 @@ function renderLiterature() {
   const selectedReading = state.readings.find((reading) => reading.id === state.literatureCitationId) || filtered[0] || state.readings[0] || null;
   const style = state.literatureCitationStyle || "APA 7";
   const citation = selectedReading ? buildBibliographicReference(selectedReading, style) : "";
+  const selectedAnnotations = [...(selectedReading?.annotations || [])].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const pdfUrl = selectedReading ? currentReadingPdfUrl(selectedReading) : "";
+  const hasPdf = Boolean(selectedReading?.pdf?.url);
+  const currentPdfPage = selectedReading && readingPdfViewer.readingId === selectedReading.id ? readingPdfViewer.currentPage : 1;
+  const extractBank = filteredReadingExtractBank();
+  const extractChapterOptions = readingExtractChapterOptions();
 
   screen.innerHTML = `
     <section class="literature-layout">
       <div>
         <div class="section-header">
           <div>
-            <p class="eyebrow">Lecturas mínimas</p>
+            <p class="eyebrow">Lecturas con trabajo real</p>
             <h2>Fuentes vinculadas a capítulos</h2>
-            <p>En la v1, las lecturas sirven para sostener capítulos concretos, tener claro para qué se usan y sacar una referencia rápida en distintos estilos sin salir del flujo de tesis.</p>
+            <p>Ahora puedes guardar el PDF privado dentro de la lectura, leerlo desde DoctoralOS y convertir subrayados en ideas de escritura sin salir del flujo de tesis.</p>
           </div>
         </div>
 
@@ -3519,6 +4099,7 @@ function renderLiterature() {
                 <th>Año</th>
                 <th>Fuente</th>
                 <th>Uso en tesis</th>
+                <th>PDF</th>
                 <th></th>
               </tr>
             </thead>
@@ -3529,14 +4110,16 @@ function renderLiterature() {
                   <td>${escapeHtml(reading.year)}</td>
                   <td>${escapeHtml(reading.source || reading.chapter)}<br>${statusPill(reading.status)}</td>
                   <td>${escapeHtml(reading.use)}</td>
+                  <td>${reading.pdf ? `<span class="status-pill done">PDF</span>` : `<span class="status-pill">Ficha</span>`}</td>
                   <td>
                     <div class="row-actions">
+                      <button class="tiny-button" data-action="select-reading" data-id="${reading.id}" type="button">Abrir</button>
                       <button class="tiny-button" data-action="show-citation" data-id="${reading.id}" type="button">Referencia</button>
                       <button class="tiny-button" data-action="delete-reading" data-id="${reading.id}" type="button"><span data-icon="trash"></span></button>
                     </div>
                   </td>
-                </tr>
-              `).join("") || `<tr><td colspan="5">${emptyState("Todavía no hay lecturas registradas.")}</td></tr>`}
+                </tr>`
+              ).join("") || `<tr><td colspan="6">${emptyState("Todavía no hay lecturas registradas.")}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -3556,6 +4139,11 @@ function renderLiterature() {
             </div>
             ${field("Uso en mi tesis", "use", "textarea", "Dónde lo citaré y para qué")}
             ${field("DOI / URL", "doi", "input", "10.xxxx/... o URL")}
+            <div class="field">
+              <label for="readingPdfFile">PDF privado (opcional)</label>
+              <input id="readingPdfFile" name="pdfFile" type="file" accept="application/pdf">
+              <p class="form-help">Hasta 20 MB. El PDF queda guardado como archivo privado del workspace y los subrayados se guardan en la lectura.</p>
+            </div>
             <button class="button" type="submit"><span data-icon="plus"></span>Añadir lectura</button>
           </form>
         </div>
@@ -3580,10 +4168,125 @@ function renderLiterature() {
           </div>
           <div class="generated-box citation-preview ${style === "BibTeX" ? "citation-preview--code" : ""}">${selectedReading ? escapeHtml(citation) : "Selecciona una lectura de la tabla o crea una nueva para generar aquí una referencia rápida."}</div>
         </article>
+
+        <article class="card reading-workspace-card">
+          <div class="section-header compact-head">
+            <div>
+              <p class="card-kicker">Lectura activa</p>
+              <h2>${selectedReading ? escapeHtml(selectedReading.title) : "Selecciona una lectura"}</h2>
+            </div>
+            ${selectedReading ? `<button class="tiny-button" data-action="select-reading" data-id="${selectedReading.id}" type="button">Ver ficha</button>` : ""}
+          </div>
+          ${selectedReading ? `
+            <div class="reading-workspace-meta">
+              <span>${escapeHtml(selectedReading.authors)}</span>
+              <span>${escapeHtml(selectedReading.year || "s. f.")}</span>
+              <span>${escapeHtml(selectedReading.chapter || "Sin capítulo")}</span>
+              <span>${selectedAnnotations.length} subrayados</span>
+            </div>
+
+            <div class="reading-workspace-actions">
+              <label class="tiny-button file-action">
+                <span data-icon="upload"></span>${hasPdf ? "Cambiar PDF" : "Subir PDF"}
+                <input data-reading-pdf-upload data-id="${selectedReading.id}" type="file" accept="application/pdf">
+              </label>
+              ${hasPdf ? `<a class="tiny-button" href="${escapeAttribute(pdfUrl)}" target="_blank" rel="noopener noreferrer">Abrir aparte</a>` : ""}
+              ${hasPdf ? `<a class="tiny-button" href="${escapeAttribute(pdfUrl)}" download="${escapeAttribute(selectedReading.pdf.name || "lectura.pdf")}">Descargar</a>` : ""}
+              ${hasPdf ? `<button class="tiny-button" data-action="remove-reading-pdf" data-id="${selectedReading.id}" type="button">Quitar PDF</button>` : ""}
+            </div>
+
+            ${hasPdf ? `
+              <div class="reading-pdf-toolbar">
+                <div class="reading-pdf-toolbar-group">
+                  <button class="tiny-button" data-action="reading-pdf-prev" type="button" ${readingPdfViewer.currentPage <= 1 ? "disabled" : ""}>Anterior</button>
+                  <span class="reading-pdf-page-chip">Página <strong data-reading-pdf-page>${escapeHtml(String(currentPdfPage))}</strong>/<strong data-reading-pdf-total>${escapeHtml(String(readingPdfViewer.totalPages || 1))}</strong></span>
+                  <button class="tiny-button" data-action="reading-pdf-next" type="button" ${(readingPdfViewer.totalPages || 1) <= (readingPdfViewer.currentPage || 1) ? "disabled" : ""}>Siguiente</button>
+                </div>
+                <div class="reading-pdf-toolbar-group">
+                  <button class="tiny-button" data-action="reading-pdf-zoom-out" type="button">-</button>
+                  <span class="reading-pdf-page-chip" data-reading-pdf-scale>${Math.round((readingPdfViewer.scale || 1.16) * 100)}%</span>
+                  <button class="tiny-button" data-action="reading-pdf-zoom-in" type="button">+</button>
+                </div>
+              </div>
+
+                <div class="reading-pdf-stage">
+                  <p class="reading-pdf-loading" data-reading-pdf-loading hidden>Cargando PDF...</p>
+                  <p class="reading-pdf-error" data-reading-pdf-error hidden></p>
+                  <div class="reading-pdf-sheet">
+                    <canvas data-reading-pdf-canvas></canvas>
+                    <div class="reading-pdf-highlight-layer" data-reading-pdf-highlights></div>
+                    <div class="reading-pdf-text-layer" data-reading-pdf-text></div>
+                  </div>
+                </div>
+
+              <div class="reading-selection-panel">
+                <div class="reading-selection-head">
+                  <strong>Subrayado en preparación</strong>
+                  <span class="reading-pdf-page-chip" data-reading-selection-page>Sin selección</span>
+                </div>
+                <div class="generated-box reading-selection-preview" data-reading-selection-preview>Selecciona texto dentro del PDF para guardar aquí un subrayado con nota.</div>
+                <div class="field">
+                  <label for="readingSelectionNote">Idea o utilidad para escribir después</label>
+                  <textarea id="readingSelectionNote" data-reading-selection-note placeholder="Qué te llevas de este fragmento y dónde podrías usarlo"></textarea>
+                </div>
+                <div class="reading-workspace-actions">
+                  <button class="button" data-action="save-reading-highlight" type="button" disabled>Guardar subrayado</button>
+                </div>
+              </div>
+            ` : `
+              <div class="empty-state">
+                Sube el PDF de esta lectura para leerlo aquí, guardar subrayados y convertir ideas en notas de capítulo.
+              </div>
+            `}
+
+            <div class="reading-highlight-list">
+              <div class="section-header compact-head">
+                <div>
+                  <p class="card-kicker">Banco de extractos</p>
+                  <h3>Subrayados reutilizables</h3>
+                </div>
+              </div>
+              <div class="filter-row reading-extract-filters">
+                <input data-literature-extract-filter type="search" value="${escapeAttribute(state.literatureExtractFilter || "")}" placeholder="Buscar idea, cita o fuente dentro de tus extractos">
+                <select data-literature-extract-chapter>
+                  <option value="all" ${state.literatureExtractChapter === "all" ? "selected" : ""}>Todos los capítulos</option>
+                  ${extractChapterOptions.map((chapter) => `<option value="${escapeAttribute(chapter)}" ${state.literatureExtractChapter === chapter ? "selected" : ""}>${escapeHtml(chapter)}</option>`).join("")}
+                </select>
+              </div>
+              ${extractBank.map((entry) => {
+                const annotation = entry.annotation;
+                const chapterLabel = annotation.chapterId ? chapterTitleFromId(annotation.chapterId, entry.readingChapter) : entry.readingChapter;
+                const isCurrentReading = selectedReading && entry.readingId === selectedReading.id;
+                return `
+                <article class="reading-highlight-card">
+                  <div class="reading-highlight-head">
+                    <span class="status-pill review">Pág. ${annotation.page}</span>
+                    <span class="reading-highlight-source">${escapeHtml(entry.readingTitle)}${isCurrentReading ? " · lectura activa" : ""}</span>
+                    <div class="row-actions">
+                      <button class="tiny-button" data-action="open-reading-highlight" data-reading-id="${entry.readingId}" data-id="${annotation.id}" type="button">Abrir en PDF</button>
+                      <button class="tiny-button" data-action="reading-highlight-to-note" data-reading-id="${entry.readingId}" data-id="${annotation.id}" type="button">Pasar a nota</button>
+                      <button class="tiny-button" data-action="delete-reading-highlight" data-reading-id="${entry.readingId}" data-id="${annotation.id}" type="button"><span data-icon="trash"></span></button>
+                    </div>
+                  </div>
+                  <div class="reading-highlight-meta">
+                    <span>${escapeHtml(entry.readingAuthors)}</span>
+                    <span>${escapeHtml(chapterLabel)}</span>
+                  </div>
+                  <blockquote class="reading-highlight-quote">“${escapeHtml(annotation.text)}”</blockquote>
+                  <p class="reading-highlight-note">${escapeHtml(annotation.note || "Sin nota adicional todavía.")}</p>
+                </article>
+              `;
+              }).join("") || `<div class="empty-state">Todavía no has guardado subrayados que coincidan con este filtro.</div>`}
+            </div>
+
+            <p class="form-help">Nota: el JSON de respaldo exporta la ficha y los subrayados, pero el binario del PDF se guarda como archivo privado del servidor.</p>
+          ` : `
+            <div class="empty-state">Selecciona una lectura para abrir aquí su ficha, su referencia y el espacio de lectura en PDF.</div>
+          `}
+        </article>
       </aside>
     </section>
   `;
-  hydrateIcons(screen);
 }
 
 function renderPlanner() {

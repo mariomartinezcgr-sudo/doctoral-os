@@ -10,7 +10,9 @@ const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(ROOT, "data");
 const SQLITE_PATH = path.join(DATA_DIR, "doctoralos.sqlite");
 const LEGACY_DB_PATH = path.join(DATA_DIR, "db.json");
+const READING_FILES_DIR = path.join(DATA_DIR, "reading-files");
 const MAX_BODY = 2 * 1024 * 1024;
+const MAX_READING_FILE_BYTES = 20 * 1024 * 1024;
 const OPENAI_API_URL = process.env.OPENAI_API_URL || "https://api.openai.com/v1/responses";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const RESEND_API_URL = "https://api.resend.com/emails";
@@ -56,6 +58,7 @@ const contentTypes = {
   ".json": "application/json; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
+  ".pdf": "application/pdf",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -80,6 +83,7 @@ const PUBLIC_FILES = new Set([
 const PUBLIC_PATH_PREFIXES = ["/assets/"];
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(READING_FILES_DIR, { recursive: true });
 const db = openDatabase();
 
 const server = http.createServer(async (req, res) => {
@@ -477,6 +481,97 @@ async function handleApi(req, res) {
     return;
   }
 
+  const readingFileMatch = pathname.match(/^\/api\/readings\/([^/]+)\/file$/);
+  if (readingFileMatch) {
+    const auth = requireUser(req, res);
+    if (!auth) return;
+
+    const readingId = decodeURIComponent(readingFileMatch[1] || "").trim();
+    const state = normalizeAssistantState(getUserState(auth.user.id));
+    const reading = state.readings.find((item) => item.id === readingId);
+
+    if (!reading) {
+      sendJson(res, 404, { error: "Lectura no encontrada." });
+      return;
+    }
+
+    if (req.method === "POST") {
+      if (!enforceRateLimit(req, res, "reading_upload", 24)) return;
+      const mimeType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (mimeType && mimeType !== "application/pdf") {
+        sendJson(res, 400, { error: "Solo se admiten archivos PDF." });
+        return;
+      }
+
+      let body;
+      try {
+        body = await readBuffer(req, MAX_READING_FILE_BYTES);
+      } catch (error) {
+        if (error && String(error.message || "").includes("demasiado grande")) {
+          sendJson(res, 413, { error: "El PDF supera el límite de 20 MB." });
+          return;
+        }
+        throw error;
+      }
+      if (!body.length) {
+        sendJson(res, 400, { error: "El PDF está vacío." });
+        return;
+      }
+      if (!String(body.slice(0, 5).toString("latin1")).startsWith("%PDF-")) {
+        sendJson(res, 400, { error: "El archivo no parece un PDF válido." });
+        return;
+      }
+
+      const filePath = readingPdfPath(auth.user.id, readingId);
+      const originalName = safeReadingFileName(req.headers["x-file-name"] || `${reading.title || "lectura"}.pdf`);
+      const uploadedAt = new Date().toISOString();
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, body);
+
+      sendJson(res, 200, {
+        ok: true,
+        file: {
+          name: originalName,
+          size: body.length,
+          mimeType: "application/pdf",
+          uploadedAt,
+          url: buildReadingFileUrl(readingId)
+        }
+      });
+      return;
+    }
+
+    if (req.method === "GET") {
+      const filePath = readingPdfPath(auth.user.id, readingId);
+      if (!fs.existsSync(filePath)) {
+        sendJson(res, 404, { error: "PDF no encontrado." });
+        return;
+      }
+      const fileName = safeReadingFileName(reading.pdf && reading.pdf.name || `${reading.title || "lectura"}.pdf`);
+      const stat = fs.statSync(filePath);
+      res.writeHead(200, {
+        ...securityHeaders(req),
+        "Content-Type": "application/pdf",
+        "Content-Length": stat.size,
+        "Content-Disposition": `inline; filename="${fileName}"`,
+        "Cache-Control": "no-store"
+      });
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      const filePath = readingPdfPath(auth.user.id, readingId);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+  }
+
   if (req.method === "PUT" && pathname === "/api/state") {
     if (!enforceRateLimit(req, res, "state", 240)) return;
     const auth = requireUser(req, res);
@@ -834,6 +929,24 @@ function readJson(req) {
   });
 }
 
+function readBuffer(req, limit = MAX_BODY) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > limit) {
+        reject(new Error("Body demasiado grande"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 function sendJson(res, status, payload, extraHeaders = {}) {
   res.writeHead(status, {
     ...securityHeaders(res.req),
@@ -876,7 +989,7 @@ function serveFile(req, res, filePath) {
 
 function securityHeaders(req) {
   const headers = {
-    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob: https://cdnjs.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), browsing-topics=()",
@@ -891,6 +1004,23 @@ function securityHeaders(req) {
     headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
   }
   return headers;
+}
+
+function safeReadingFileName(value) {
+  const raw = String(value || "lectura.pdf").trim() || "lectura.pdf";
+  const normalized = raw.replace(/[^A-Za-z0-9._ -]+/g, "-").replace(/\s+/g, " ").trim() || "lectura";
+  const withExtension = /\.pdf$/i.test(normalized) ? normalized : `${normalized}.pdf`;
+  return withExtension.slice(0, 180) || "lectura.pdf";
+}
+
+function readingPdfPath(userId, readingId) {
+  const safeUserId = String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeReadingId = String(readingId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  return path.join(READING_FILES_DIR, safeUserId, `${safeReadingId}.pdf`);
+}
+
+function buildReadingFileUrl(readingId) {
+  return `/api/readings/${encodeURIComponent(String(readingId || "").trim())}/file`;
 }
 
 function createUser(email, password, name) {

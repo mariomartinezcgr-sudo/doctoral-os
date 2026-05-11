@@ -226,6 +226,73 @@ async function main() {
     assert.ok(String(ownerApp.body).includes("Sistema doctoral"));
   });
 
+  await withServer(BASE_PORT + 5, { NODE_ENV: "test" }, async ({ request }) => {
+    const email = `reading-${Date.now()}@example.com`;
+    const register = await request("/api/register", {
+      method: "POST",
+      body: { email, password: "password123", name: "Reading Owner" }
+    });
+    assert.equal(register.status, 201);
+
+    const state = {
+      readings: [
+        {
+          id: "rd-pdf",
+          title: "Artículo con PDF",
+          authors: "Autor, A.",
+          year: "2026",
+          source: "Journal test",
+          status: "Leyendo",
+          chapter: "Sin capítulo",
+          use: "Base conceptual",
+          doi: ""
+        }
+      ]
+    };
+
+    const saved = await request("/api/state", {
+      method: "PUT",
+      cookie: register.cookie,
+      body: { state }
+    });
+    assert.equal(saved.status, 200);
+
+    const fakePdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", "utf8");
+    const uploaded = await request("/api/readings/rd-pdf/file", {
+      method: "POST",
+      cookie: register.cookie,
+      rawBody: fakePdf,
+      headers: {
+        "Content-Type": "application/pdf",
+        "X-File-Name": "articulo-prueba.pdf"
+      }
+    });
+    assert.equal(uploaded.status, 200);
+    assert.equal(uploaded.body.ok, true);
+    assert.equal(uploaded.body.file.name, "articulo-prueba.pdf");
+
+    const fetched = await request("/api/readings/rd-pdf/file", {
+      method: "GET",
+      cookie: register.cookie
+    });
+    assert.equal(fetched.status, 200);
+    assert.equal(fetched.contentType.includes("application/pdf"), true);
+    assert.ok(String(fetched.body).includes("%PDF-1.4"));
+
+    const removed = await request("/api/readings/rd-pdf/file", {
+      method: "DELETE",
+      cookie: register.cookie
+    });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.ok, true);
+
+    const missing = await request("/api/readings/rd-pdf/file", {
+      method: "GET",
+      cookie: register.cookie
+    });
+    assert.equal(missing.status, 404);
+  });
+
   await withMockGoogleCalendar(BASE_PORT + 10, async (googleConfig) => {
     const appPort = BASE_PORT + 4;
     await withServer(appPort, {
@@ -426,14 +493,14 @@ async function waitForHealth(baseUrl, getStderr) {
 }
 
 async function request(baseUrl, pathname, options) {
-  const headers = {};
+  const headers = { ...(options.headers || {}) };
   if (options.body) headers["Content-Type"] = "application/json";
   if (options.cookie) headers.Cookie = options.cookie;
 
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: options.method,
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    body: options.body ? JSON.stringify(options.body) : options.rawBody,
     redirect: options.redirect || "follow"
   });
   const text = await response.text();
@@ -446,7 +513,8 @@ async function request(baseUrl, pathname, options) {
       : text,
     setCookie,
     location: response.headers.get("location") || "",
-    cookie: setCookie ? setCookie.split(";")[0] : ""
+    cookie: setCookie ? setCookie.split(";")[0] : "",
+    contentType
   };
 }
 
