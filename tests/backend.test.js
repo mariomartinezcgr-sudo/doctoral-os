@@ -464,6 +464,7 @@ async function main() {
             decisions: "",
             tasks: "",
             notes: "Revisar muestra y justificar mejor los criterios.\nDecisión: cerrar una versión más explícita del apartado 2.2.\nTareas: reescribir 2.2 y enviar borrador el 2026-05-13.",
+            transcript: "Directora: reescribe el apartado 2.2 y déjame un borrador el 2026-05-13.\nDoctorando: también voy a justificar mejor los criterios de muestra.",
             next: ""
           }
         ]
@@ -480,6 +481,7 @@ async function main() {
       assert.equal(meetingClosure.body.pendingAction.actions[0].type, "update_meeting_closure");
       assert.ok(meetingClosure.body.pendingAction.actions.some((action) => action.type === "create_task"));
       assert.equal(meetingClosure.body.state.meetings[0].summary, "");
+      assert.equal(meetingClosure.body.state.meetings[0].transcript, closureState.meetings[0].transcript);
       assert.ok(String(meetingClosure.body.reply).toLowerCase().includes("vista previa"));
     });
   });

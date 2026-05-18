@@ -672,6 +672,7 @@ function normalizeMeetingRecord(meeting) {
   next.decisions = next.decisions || "";
   next.tasks = next.tasks || "";
   next.notes = next.notes || "";
+  next.transcript = next.transcript || "";
   next.next = next.next || "";
   if (next.type === "Direccion") next.type = "Dirección";
   if (next.type === "Revision interna") next.type = "Revisión interna";
@@ -2275,8 +2276,19 @@ async function handleScreenClick(event) {
   if (action === "save-meeting-notes") {
     const meeting = state.meetings.find((item) => item.id === id);
     if (!meeting) return;
-    saveState("Notas de reunión guardadas");
+    saveState("Borrador de reunión guardado");
     render();
+    return;
+  }
+
+  if (action === "meeting-analyze-transcript") {
+    const meeting = state.meetings.find((item) => item.id === id);
+    if (!meeting) return;
+    if (!meetingHasTranscript(meeting)) {
+      showToast("Pega primero una transcripción o unas notas largas de la reunión");
+      return;
+    }
+    submitAssistantPrompt(`Analiza la transcripción de la reunión del ${meeting.date}${meeting.time ? ` a las ${meeting.time}` : ""} y deja resumen, decisiones y tareas automáticas a partir de esa transcripción.`);
     return;
   }
 
@@ -2284,7 +2296,7 @@ async function handleScreenClick(event) {
     const meeting = state.meetings.find((item) => item.id === id);
     if (!meeting) return;
     if (!meetingHasClosureSource(meeting)) {
-      showToast("Añade primero unas notas rápidas o acuerdos de salida");
+      showToast("Añade unas notas rápidas o pega la transcripción antes de cerrar la reunión");
       return;
     }
     submitAssistantPrompt(`Cierra la reunión del ${meeting.date}${meeting.time ? ` a las ${meeting.time}` : ""} y deja resumen, decisiones y tareas a partir de sus notas.`);
@@ -2762,6 +2774,12 @@ function handleScreenInput(event) {
   if (event.target.matches("[data-meeting-notes]")) {
     const meeting = state.meetings.find((item) => item.id === event.target.dataset.id);
     if (meeting) meeting.notes = event.target.value;
+    return;
+  }
+
+  if (event.target.matches("[data-meeting-transcript]")) {
+    const meeting = state.meetings.find((item) => item.id === event.target.dataset.id);
+    if (meeting) meeting.transcript = event.target.value;
     return;
   }
 
@@ -4492,11 +4510,16 @@ function renderReviews() {
               <p><strong>Decisiones:</strong> ${escapeHtml(meeting.decisions)}</p>
               <p><strong>Tareas:</strong> ${escapeHtml(meeting.tasks)}</p>
               <label class="field">
+                <span>Transcripción o notas largas</span>
+                <textarea data-meeting-transcript data-id="${meeting.id}" rows="8" placeholder="Pega aquí la transcripción de Meet, Zoom o una llamada para que TeDoc detecte tareas y decisiones automáticamente.">${escapeHtml(meeting.transcript || "")}</textarea>
+              </label>
+              <label class="field">
                 <span>Notas rápidas de salida</span>
                 <textarea data-meeting-notes data-id="${meeting.id}" rows="5" placeholder="Pega aquí notas, acuerdos sueltos o tareas habladas para que TeDoc cierre la reunión automáticamente.">${escapeHtml(meeting.notes || "")}</textarea>
               </label>
               <div class="summary-actions">
-                <button class="tiny-button" data-action="save-meeting-notes" data-id="${meeting.id}" type="button">Guardar notas</button>
+                <button class="tiny-button" data-action="save-meeting-notes" data-id="${meeting.id}" type="button">Guardar borrador</button>
+                <button class="tiny-button" data-action="meeting-analyze-transcript" data-id="${meeting.id}" type="button" ${meetingHasTranscript(meeting) ? "" : "disabled"}><span data-icon="assistant"></span>TeDoc analiza transcripción</button>
                 <button class="ghost-button" data-action="meeting-autoclose" data-id="${meeting.id}" type="button" ${meetingHasClosureSource(meeting) ? "" : "disabled"}><span data-icon="assistant"></span>TeDoc cierra reunión</button>
               </div>
             </article>
@@ -5384,6 +5407,7 @@ function assistantSuggestions() {
     "Detecta mis riesgos de entrega ahora mismo",
     "Convierte mis comentarios pendientes en foco de esta semana",
     "Prepárame la próxima reunión y guárdala en la app",
+    "Analiza la transcripción de mi última reunión y crea tareas automáticas",
     "Redacta respuesta al comentario más urgente",
     ...chapterSuggestions,
     "Cómo de seguro está mi trabajo ahora mismo",
@@ -5609,6 +5633,9 @@ function isMeetingClosureRequest(normalized) {
       normalized.includes("cierra")
       || normalized.includes("cerrar")
       || normalized.includes("cierre")
+      || normalized.includes("transcripcion")
+      || normalized.includes("transcripción")
+      || normalized.includes("analiza")
       || normalized.includes("resumen")
       || normalized.includes("decisiones")
     )
@@ -6020,9 +6047,14 @@ function meetingHasClosureSource(meeting) {
   return Boolean(String(buildMeetingClosureSource(meeting)).trim());
 }
 
+function meetingHasTranscript(meeting) {
+  return Boolean(String(meeting?.transcript || "").trim());
+}
+
 function buildMeetingClosureSource(meeting) {
   return [
     String(meeting?.notes || "").trim(),
+    String(meeting?.transcript || "").trim(),
     String(meeting?.decisions || "").trim(),
     String(meeting?.tasks || "").trim(),
     String(meeting?.agenda || "").trim()
@@ -6038,7 +6070,7 @@ function buildMeetingClosureDraft(meeting) {
   const summary = buildMeetingSummaryText(meeting, baseLines, topic, style);
   const decisionLines = (sections.decisions.length ? sections.decisions : inferMeetingDecisionLines(baseLines, topic)).slice(0, style.meetingMode === "brief" ? 2 : 4);
   const taskLines = (sections.tasks.length ? sections.tasks : inferMeetingTaskLines(baseLines, topic)).slice(0, style.meetingMode === "brief" ? 2 : 4);
-  const next = extractDateFromText(meeting.notes || "") || meeting.next || "";
+  const next = extractNextMeetingDateFromSource(source, meeting.date) || meeting.next || "";
   return {
     summary,
     decisions: decisionLines.join("\n"),
@@ -6171,6 +6203,20 @@ function ensureSentence(text) {
   const cleaned = cleanMeetingNoteLine(text);
   if (!cleaned) return "";
   return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+}
+
+function extractNextMeetingDateFromSource(text, currentDate = "") {
+  const raw = String(text || "");
+  const current = String(currentDate || "").trim();
+  const isoDates = [...raw.matchAll(/\b(20\d{2})-(\d{2})-(\d{2})\b/g)]
+    .map((match) => `${match[1]}-${match[2]}-${match[3]}`);
+  const slashDates = [...raw.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/g)]
+    .map((match) => `${match[3]}-${String(match[2]).padStart(2, "0")}-${String(match[1]).padStart(2, "0")}`);
+  const explicitDates = [...isoDates, ...slashDates];
+  const explicit = explicitDates.find((value) => value && value !== current);
+  if (explicit) return explicit;
+  if (explicitDates.length) return "";
+  return extractDateFromText(raw);
 }
 
 function prepareCommentResponseFromPrompt(message) {

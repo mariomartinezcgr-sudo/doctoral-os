@@ -1636,6 +1636,7 @@ function mergeGoogleCalendarMeetings(existingMeetings, importedMeetings) {
       decisions: current.decisions || "",
       tasks: current.tasks || "",
       notes: current.notes || "",
+      transcript: current.transcript || "",
       next: current.next || ""
     };
     updatedCount += 1;
@@ -1678,6 +1679,7 @@ function mapGoogleCalendarEventToMeeting(event) {
     decisions: "",
     tasks: "",
     notes: "",
+    transcript: "",
     next: ""
   };
 }
@@ -1936,6 +1938,7 @@ function buildAssistantPrompt(user, state, clientMeta = {}) {
     "Si el usuario pide crear una tarea o agendar una reunión dentro de la app, usa las herramientas disponibles.",
     "Si el usuario te pide preparar una reunión, guarda una agenda útil dentro de la reunión adecuada.",
     "Si el usuario te pide cerrar una reunión a partir de notas, guarda resumen, decisiones y tareas dentro de esa reunión.",
+    "Si el usuario pega una transcripción de reunión, úsala como fuente principal para extraer resumen, decisiones y tareas concretas.",
     "Cuando cierres una reunión, procura que tasks deje siguientes pasos concretos y accionables.",
     "Si el usuario te pide responder a un comentario, guarda una respuesta de trabajo dentro del comentario correspondiente.",
     "Si el usuario trabaja un capítulo concreto, puedes detectar la sección más floja, convertir un comentario en checklist de reescritura, proponer estructura de un apartado y preparar la siguiente sesión.",
@@ -2011,6 +2014,7 @@ function buildAssistantContext(state) {
       decisions: meeting.decisions || "",
       tasks: meeting.tasks || "",
       notes: meeting.notes || "",
+      transcript: String(meeting.transcript || "").slice(0, 3000),
       next: meeting.next || "",
       provider: meeting.provider || ""
     })),
@@ -2342,6 +2346,7 @@ function executeAssistantTool(state, call, pendingActions = []) {
       decisions: "",
       tasks: "",
       notes: "",
+      transcript: "",
       next: ""
     };
     state.meetings.unshift(meeting);
